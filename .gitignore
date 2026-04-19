@@ -1,0 +1,26 @@
+# Build files
+.gradle/
+.kotlin/
+/build
+/*/build
+bin/
+gen/
+out/
+release/
+
+# Local configuration files (sdk path, etc)
+local.properties
+proguard-dictionary.txt
+
+# Log Files
+*.log
+
+# IntelliJ
+*.iml
+.idea
+
+# File-based project format
+*.iws
+*.ipr
+
+/temp
