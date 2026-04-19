@@ -23,4 +23,7 @@ proguard-dictionary.txt
 *.iws
 *.ipr
 
+/temp-data
 /temp
+/logs
+/output
