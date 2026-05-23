@@ -1,5 +1,6 @@
 package com.badmanners.animurglar.pipeline
 
+import com.badmanners.animurglar.subtitles.DownloadedSubtitleEpisode
 import com.badmanners.animurglar.utils.episodeTag
 import com.badmanners.animurglar.utils.normalizePathSegment
 import java.nio.file.Path
@@ -30,6 +31,8 @@ data class ProcessingEpisodeInput(
     val episodeNumber: Int,
     val rawVideoPath: Path,
     val dubbedTracks: List<ProcessingDubTrackInput>,
+    val subtitleTracks: List<DownloadedSubtitleEpisode>,
+    val subtitleFontPaths: List<Path>,
 )
 
 data class ProcessingPaths(
@@ -123,6 +126,8 @@ fun DownloadBatch.toProcessingRequest(tempDir: Path, outputDir: Path): Processin
                         mediaPath = track.mediaPath,
                     )
                 },
+                subtitleTracks = episode.subtitleTracks,
+                subtitleFontPaths = episode.subtitleFontPaths,
             )
         },
         paths = paths,

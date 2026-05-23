@@ -1,6 +1,7 @@
 package com.badmanners.animurglar.ffmpeg
 
 import com.badmanners.animurglar.pipeline.EpisodeMergeInput
+import com.badmanners.animurglar.pipeline.MergeSubtitleTrackInput
 import com.badmanners.animurglar.pipeline.SyncedDubAudio
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -165,7 +166,13 @@ class FfmpegService {
         val orderedDubTracks = request.input.dubTracks.sortedWith(
             compareBy({ it.sourceId.lowercase() }, { it.teamName.lowercase() })
         )
-        val mergeInput = request.input.copy(dubTracks = orderedDubTracks)
+        val orderedSubtitleTracks = request.input.subtitleTracks.sortedWith(
+            compareBy({ it.teamName.lowercase() }, { it.kind }, { it.title.lowercase() })
+        )
+        val mergeInput = request.input.copy(
+            dubTracks = orderedDubTracks,
+            subtitleTracks = orderedSubtitleTracks,
+        )
 
         mergeInput.outputPath.parent.createDirectories()
         executeFfmpeg(
@@ -196,6 +203,12 @@ class FfmpegService {
             )
         }
 
+        input.subtitleTracks.forEach { subtitleTrack ->
+            arguments += listOf(
+                "-i", subtitleTrack.subtitlePath.toAbsolutePath().toString(), // External subtitle input.
+            )
+        }
+
         arguments += listOf(
             "-map", "0:v:0", // Keep the first video stream from the main input.
         )
@@ -212,6 +225,17 @@ class FfmpegService {
             "-map", "0:a?", // Keep all embedded original audio streams from the main input.
         )
 
+        input.subtitleTracks.forEach {
+            arguments += listOf(
+                "-map", "$nextInputIndex:s:0", // Map each downloaded subtitle track in deterministic input order.
+            )
+            nextInputIndex += 1
+        }
+
+        arguments += listOf(
+            "-map", "0:s?", // Keep all embedded original subtitle streams from the main input.
+        )
+
         input.dubTracks.forEachIndexed { index, dubTrack ->
             arguments += listOf(
                 "-metadata:s:a:$index",
@@ -219,6 +243,10 @@ class FfmpegService {
                 "-metadata:s:a:$index",
                 "language=${dubTrack.languageTag}", // Use source-provided language tag for the dub track.
             )
+        }
+
+        input.subtitleTracks.forEachIndexed { index, subtitleTrack ->
+            arguments += subtitleMetadataArguments(index = index, track = subtitleTrack)
         }
 
         arguments += listOf(
@@ -231,12 +259,46 @@ class FfmpegService {
             )
         }
 
+        if (input.subtitleTracks.isNotEmpty()) {
+            arguments += listOf(
+                "-disposition:s", "0", // Clear all subtitle dispositions before setting our default track.
+            )
+            input.subtitleTracks.indexOfFirst { it.default }.takeIf { it >= 0 }?.let { defaultIndex ->
+                arguments += listOf(
+                    "-disposition:s:$defaultIndex", "default", // Make only the first caption-only subtitle default.
+                )
+            }
+        }
+
+        arguments += fontAttachmentArguments(input.subtitleFontPaths)
+
         arguments += listOf(
             "-c", "copy", // Stream copy all mapped tracks without re-encoding.
             "-metadata", "title=Episode ${input.episodeNumber}", // Container title metadata.
             input.outputPath.toAbsolutePath().toString(), // Final merged file path.
         )
         return arguments
+    }
+
+    private fun subtitleMetadataArguments(index: Int, track: MergeSubtitleTrackInput): List<String> = listOf(
+        "-metadata:s:s:$index",
+        "title=${track.title}",
+        "-metadata:s:s:$index",
+        "language=${track.languageTag}",
+    )
+
+    private fun fontAttachmentArguments(fontPaths: List<Path>) = fontPaths.distinctBy { it.fileName }
+        .flatMapIndexed { index, fontPath ->
+            listOf(
+                "-attach", fontPath.toAbsolutePath().toString(),
+                "-metadata:s:t:$index", "mimetype=${fontMimeType(fontPath)}",
+            )
+        }
+
+    private fun fontMimeType(path: Path): String = when (path.fileName.toString().substringAfterLast('.').lowercase()) {
+        "otf" -> "font/otf"
+        "ttc", "ttf" -> "font/ttf"
+        else -> "application/octet-stream"
     }
 
     private fun buildApplyArguments(

@@ -12,6 +12,7 @@ import com.badmanners.animurglar.dubs.DubInfo
 import com.badmanners.animurglar.nyaa.TorrentCandidate
 import com.badmanners.animurglar.pipeline.DownloadBatch
 import com.badmanners.animurglar.shikimori.ShikimoriAnime
+import com.badmanners.animurglar.subtitles.SubtitleTeamInfo
 import com.badmanners.animurglar.ui.downloader.DownloaderStore
 import com.badmanners.animurglar.ui.dubs.DubsPickerStore
 import com.badmanners.animurglar.ui.episodes.EpisodeMappingStore
@@ -23,6 +24,7 @@ import com.badmanners.animurglar.ui.root.RootStore.Label
 import com.badmanners.animurglar.ui.root.RootStore.Message
 import com.badmanners.animurglar.ui.root.RootStore.State
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStore
+import com.badmanners.animurglar.ui.subtitles.SubtitlesPickerStore
 import com.badmanners.animurglar.utils.deleteRecursivelyIfExists
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -65,6 +67,7 @@ class RootStoreFactory(
     private val shikimoriStore: ShikimoriStore,
     private val nyaaPickerStore: NyaaPickerStore,
     private val dubsPickerStore: DubsPickerStore,
+    private val subtitlesPickerStore: SubtitlesPickerStore,
     private val episodeMappingStore: EpisodeMappingStore,
     private val downloaderStore: DownloaderStore,
     private val processingStore: ProcessingStore,
@@ -125,10 +128,11 @@ class RootStoreFactory(
                 val rootState = state()
                 val nyaaState = nyaaPickerStore.state
                 val dubsState = dubsPickerStore.state
+                val subtitlesState = subtitlesPickerStore.state
                 val episodeMappingState = episodeMappingStore.state
                 val downloaderState = downloaderStore.state
                 val processingState = processingStore.state
-                if (!isStartAvailable(rootState, nyaaState, dubsState, downloaderState, processingState)) {
+                if (!isStartAvailable(rootState, nyaaState, dubsState, subtitlesState, downloaderState, processingState)) {
                     return@onIntent
                 }
 
@@ -136,6 +140,7 @@ class RootStoreFactory(
                     rootState = rootState,
                     nyaaState = nyaaState,
                     dubsState = dubsState,
+                    subtitlesState = subtitlesState,
                     episodeMappingState = episodeMappingState,
                 )
 
@@ -182,8 +187,10 @@ class RootStoreFactory(
     ) {
         nyaaPickerStore.accept(NyaaPickerStore.Intent.CancelSearch)
         dubsPickerStore.accept(DubsPickerStore.Intent.CancelSearch)
+        subtitlesPickerStore.accept(SubtitlesPickerStore.Intent.CancelSearch)
         nyaaPickerStore.accept(NyaaPickerStore.Intent.Reset)
         dubsPickerStore.accept(DubsPickerStore.Intent.Reset)
+        subtitlesPickerStore.accept(SubtitlesPickerStore.Intent.Reset)
         episodeMappingStore.accept(EpisodeMappingStore.Intent.Reset)
 
         if (cancelRunningExecution) {
@@ -207,12 +214,14 @@ class RootStoreFactory(
             )
         )
         dubsPickerStore.accept(DubsPickerStore.Intent.Search(queries = anime.dubsQueries))
+        subtitlesPickerStore.accept(SubtitlesPickerStore.Intent.Search(shikimoriUrl = anime.url))
     }
 
     private fun prepareDownloadRequest(
         rootState: State,
         nyaaState: NyaaPickerStore.State,
         dubsState: DubsPickerStore.State,
+        subtitlesState: SubtitlesPickerStore.State,
         episodeMappingState: EpisodeMappingStore.State,
     ): DownloadRequest {
         val selectedAnime = checkNotNull(rootState.selectedAnime) { "Anime is not selected." }
@@ -231,6 +240,7 @@ class RootStoreFactory(
             selectedEpisodes = selectedEpisodes,
             selectedDubs = selectedDubs,
             episodeMapping = episodeMapping,
+            selectedSubtitles = subtitlesState.selectedSubtitles(),
         )
     }
 
@@ -243,14 +253,19 @@ class RootStoreFactory(
         return dubs.filter { it.key in selectedDubKeys }
     }
 
+    private fun SubtitlesPickerStore.State.selectedSubtitles(): List<SubtitleTeamInfo> {
+        return teams.filter { it.key in selectedTeamKeys }
+    }
+
     private fun isStartAvailable(
         rootState: State,
         nyaaState: NyaaPickerStore.State,
         dubsState: DubsPickerStore.State,
+        subtitlesState: SubtitlesPickerStore.State,
         downloaderState: DownloaderStore.State,
         processingState: ProcessingStore.State,
     ): Boolean {
-        if (rootState.selectedAnime == null || nyaaState.isLoading || dubsState.isLoading || downloaderState.isRunning || processingState.isRunning) {
+        if (rootState.selectedAnime == null || nyaaState.isLoading || dubsState.isLoading || subtitlesState.isLoading || downloaderState.isRunning || processingState.isRunning) {
             return false
         }
 

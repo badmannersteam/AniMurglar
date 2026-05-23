@@ -35,6 +35,7 @@ fun DownloaderScreen(
         || state.error != null
         || state.torrentProgress.isNotEmpty()
         || state.dubProgress.isNotEmpty()
+        || state.subtitleProgress.isNotEmpty()
 
     if (!isVisible) {
         return
@@ -97,6 +98,16 @@ fun DownloaderScreen(
                     modifier = Modifier.fillMaxWidth()
                         .padding(top = 24.dp)
                         .weight(state.dubProgress.size.coerceIn(0..state.torrentProgress.size * 3).toFloat().coerceAtLeast(0.1f))
+                )
+            }
+
+            if (state.subtitleProgress.isNotEmpty()) {
+                ProgressGroup(
+                    title = "Субтитры",
+                    items = state.subtitleProgress,
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(top = 24.dp)
+                        .weight(state.subtitleProgress.size.coerceIn(0..state.torrentProgress.size * 3).toFloat().coerceAtLeast(0.1f))
                 )
             }
         }

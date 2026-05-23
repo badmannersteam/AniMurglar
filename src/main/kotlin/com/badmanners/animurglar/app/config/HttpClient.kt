@@ -39,6 +39,10 @@ fun httpClient(config: AppConfig) = HttpClient(OkHttp) {
     val kodik = rateLimiter(maxRate = 10) {
         maxBurst = 25
     }
+    val anime365 = rateLimiter(maxRate = 120) {
+        maxBurst = 25
+        maxRateTimeUnit = ChronoUnit.MINUTES
+    }
 
     plugin(HttpSend).intercept { builder ->
         when {
@@ -46,6 +50,7 @@ fun httpClient(config: AppConfig) = HttpClient(OkHttp) {
             builder.host.contains("hapi.hentaicdn.org") -> animelib
             builder.host.contains("yummyanime.tv") -> yummy
             builder.host.contains("kodikplayer.com") -> kodik
+            builder.host.contains("smotret-anime.org") -> anime365
             else -> null
         }?.awaitUntilTake()
 

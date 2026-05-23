@@ -42,6 +42,8 @@ import com.badmanners.animurglar.ui.processing.ProcessingScreen
 import com.badmanners.animurglar.ui.processing.ProcessingStore
 import com.badmanners.animurglar.ui.shikimori.ShikimoriScreen
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStore
+import com.badmanners.animurglar.ui.subtitles.SubtitlesPickerScreen
+import com.badmanners.animurglar.ui.subtitles.SubtitlesPickerStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 
 
@@ -52,6 +54,7 @@ fun RootScreen(
     shikimoriStore: ShikimoriStore,
     nyaaPickerStore: NyaaPickerStore,
     dubsPickerStore: DubsPickerStore,
+    subtitlesPickerStore: SubtitlesPickerStore,
     episodeMappingStore: EpisodeMappingStore,
     downloaderStore: DownloaderStore,
     processingStore: ProcessingStore,
@@ -60,12 +63,14 @@ fun RootScreen(
     val shikimoriState by shikimoriStore.stateFlow.collectAsState()
     val nyaaState by nyaaPickerStore.stateFlow.collectAsState()
     val dubsState by dubsPickerStore.stateFlow.collectAsState()
+    val subtitlesState by subtitlesPickerStore.stateFlow.collectAsState()
     val downloaderState by downloaderStore.stateFlow.collectAsState()
     val processingState by processingStore.stateFlow.collectAsState()
     val isExecutionRunning = downloaderState.isRunning || processingState.isRunning
     val isStartVisible = !shikimoriState.isLoading
         && !nyaaState.isLoading
         && !dubsState.isLoading
+        && !subtitlesState.isLoading
         && !isExecutionRunning
         && rootState.selectedAnime != null
         && nyaaState.selectedCandidateKey != null
@@ -127,10 +132,17 @@ fun RootScreen(
                                     )
                                 }
 
-                                DubsPickerScreen(
-                                    dubsPickerStore = dubsPickerStore,
-                                    modifier = Modifier.fillMaxHeight().weight(1f)
-                                )
+                                Column(modifier = Modifier.fillMaxHeight().weight(1f)) {
+                                    DubsPickerScreen(
+                                        dubsPickerStore = dubsPickerStore,
+                                        modifier = Modifier.weight(0.7f, fill = false),
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    SubtitlesPickerScreen(
+                                        subtitlesPickerStore = subtitlesPickerStore,
+                                        modifier = Modifier.weight(0.3f, fill = false),
+                                    )
+                                }
                             } else {
                                 DownloaderScreen(
                                     downloaderStore = downloaderStore,

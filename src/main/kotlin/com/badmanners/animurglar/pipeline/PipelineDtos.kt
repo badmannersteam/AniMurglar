@@ -1,6 +1,7 @@
 package com.badmanners.animurglar.pipeline
 
 import com.badmanners.animurglar.dubs.DubEpisodeFormat
+import com.badmanners.animurglar.subtitles.DownloadedSubtitleEpisode
 import java.nio.file.Path
 
 data class DownloadedDubEpisode(
@@ -15,7 +16,9 @@ data class DownloadedDubEpisode(
 data class DownloadedEpisodeAssets(
     val episodeNumber: Int,
     val rawVideoPath: Path,
-    val dubbedTracks: List<DownloadedDubEpisode> = emptyList(),
+    val dubbedTracks: List<DownloadedDubEpisode>,
+    val subtitleTracks: List<DownloadedSubtitleEpisode>,
+    val subtitleFontPaths: List<Path>
 )
 
 data class DownloadBatch(
@@ -50,9 +53,24 @@ data class MergeDubTrackInput(
     val audioPath: Path,
 )
 
+enum class MergeSubtitleTrackKind {
+    CAPTIONS_ONLY, FULL
+}
+
+data class MergeSubtitleTrackInput(
+    val teamName: String,
+    val title: String,
+    val languageTag: String,
+    val subtitlePath: Path,
+    val kind: MergeSubtitleTrackKind,
+    val default: Boolean,
+)
+
 data class EpisodeMergeInput(
     val episodeNumber: Int,
     val videoPath: Path,
     val dubTracks: List<MergeDubTrackInput>,
+    val subtitleTracks: List<MergeSubtitleTrackInput>,
+    val subtitleFontPaths: List<Path>,
     val outputPath: Path,
 )

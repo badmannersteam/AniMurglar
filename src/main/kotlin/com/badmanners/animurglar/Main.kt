@@ -57,7 +57,7 @@ fun main() {
                 specVersion = ColorSpec.SpecVersion.SPEC_2025
             ) {
                 CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
-                    RootScreen(koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get())
+                    RootScreen(koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get())
                 }
             }
         }

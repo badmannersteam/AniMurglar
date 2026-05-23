@@ -11,6 +11,7 @@ class DownloadCoordinator(
     private val config: AppConfig,
     private val torrentDownloadService: TorrentDownloadService,
     private val dubDownloadService: DubDownloadService,
+    private val subtitleDownloadService: SubtitleDownloadService,
 ) {
     suspend fun download(request: DownloadRequest, onProgress: (DownloadProgressEvent) -> Unit): DownloadBatch {
         require(request.selectedEpisodes.isNotEmpty()) { "No episodes selected for download." }
@@ -34,17 +35,28 @@ class DownloadCoordinator(
                     onProgress = onProgress,
                 )
             }
+            val subtitlesJob = async {
+                subtitleDownloadService.download(
+                    request = request,
+                    paths = paths,
+                    onProgress = onProgress,
+                )
+            }
 
             val rawByEpisode = torrentJob.await()
             val dubsByEpisode = dubsJob.await()
+            val subtitlesByEpisode = subtitlesJob.await()
 
             request.selectedEpisodes.toSortedSet().map { episodeNumber ->
                 val rawVideoPath = rawByEpisode[episodeNumber]
                     ?: error("Raw file was not prepared for episode $episodeNumber")
+                val subtitleTracks = subtitlesByEpisode[episodeNumber].orEmpty()
                 DownloadedEpisodeAssets(
                     episodeNumber = episodeNumber,
                     rawVideoPath = rawVideoPath,
                     dubbedTracks = dubsByEpisode[episodeNumber].orEmpty(),
+                    subtitleTracks = subtitleTracks,
+                    subtitleFontPaths = subtitleTracks.flatMap { it.fontPaths }.distinctBy { it.fileName },
                 )
             }
         }

@@ -8,6 +8,7 @@ import com.badmanners.animurglar.downloader.DirectDownloader
 import com.badmanners.animurglar.downloader.DownloadCoordinator
 import com.badmanners.animurglar.downloader.DubDownloadService
 import com.badmanners.animurglar.downloader.HlsDownloader
+import com.badmanners.animurglar.downloader.SubtitleDownloadService
 import com.badmanners.animurglar.downloader.TorrentDownloadService
 import com.badmanners.animurglar.dubs.AnimeLibDubsSource
 import com.badmanners.animurglar.dubs.DubsGateway
@@ -18,6 +19,8 @@ import com.badmanners.animurglar.ffmpeg.SyncAnalyzeService
 import com.badmanners.animurglar.ffmpeg.SyncChartService
 import com.badmanners.animurglar.nyaa.NyaaGateway
 import com.badmanners.animurglar.shikimori.ShikimoriGateway
+import com.badmanners.animurglar.subtitles.Anime365SubtitlesGateway
+import com.badmanners.animurglar.subtitles.SubtitleCaptionFilterService
 import com.badmanners.animurglar.ui.downloader.DownloaderStore
 import com.badmanners.animurglar.ui.downloader.DownloaderStoreFactory
 import com.badmanners.animurglar.ui.dubs.DubsPickerStore
@@ -32,6 +35,8 @@ import com.badmanners.animurglar.ui.root.RootStore
 import com.badmanners.animurglar.ui.root.RootStoreFactory
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStore
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStoreFactory
+import com.badmanners.animurglar.ui.subtitles.SubtitlesPickerStore
+import com.badmanners.animurglar.ui.subtitles.SubtitlesPickerStoreFactory
 import org.koin.dsl.module
 
 fun appModule(config: AppConfig) = module {
@@ -51,16 +56,20 @@ fun appModule(config: AppConfig) = module {
 
     single { DubsGateway(listOf(get<AnimeLibDubsSource>(), get<YummyAnimeDubsSource>())) }
 
+    single { Anime365SubtitlesGateway(get()) }
+    single { SubtitleCaptionFilterService() }
+
     single<StoreFactory> { DefaultStoreFactory() }
 
     single<ShikimoriStore> { ShikimoriStoreFactory(get(), get()).create() }
     single<NyaaPickerStore> { NyaaPickerStoreFactory(get(), get()).create() }
     single<DubsPickerStore> { DubsPickerStoreFactory(get(), get()).create() }
+    single<SubtitlesPickerStore> { SubtitlesPickerStoreFactory(get(), get()).create() }
     single<EpisodeMappingStore> { EpisodeMappingStoreFactory(get()).create() }
     single<DownloaderStore> { DownloaderStoreFactory(get(), get()).create() }
     single<ProcessingStore> { ProcessingStoreFactory(get(), get(), get(), get(), get()).create() }
 
-    single<RootStore> { RootStoreFactory(get(), get(), get(), get(), get(), get(), get(), get()).create() }
+    single<RootStore> { RootStoreFactory(get(), get(), get(), get(), get(), get(), get(), get(), get()).create() }
 
     single { FfmpegService() }
     single { SyncAnalyzeService(get()) }
@@ -69,6 +78,7 @@ fun appModule(config: AppConfig) = module {
     single { DirectDownloader(get(), get()) }
     single { HlsDownloader(get(), get(), get()) }
     single { DubDownloadService(get(), get(), get(), get()) }
-    single { DownloadCoordinator(get(), get(), get()) }
+    single { SubtitleDownloadService(get(), get(), get()) }
+    single { DownloadCoordinator(get(), get(), get(), get()) }
 }
 

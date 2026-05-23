@@ -15,6 +15,8 @@ import com.badmanners.animurglar.ffmpeg.SyncTrackPlan
 import com.badmanners.animurglar.pipeline.DownloadBatch
 import com.badmanners.animurglar.pipeline.EpisodeMergeInput
 import com.badmanners.animurglar.pipeline.MergeDubTrackInput
+import com.badmanners.animurglar.pipeline.MergeSubtitleTrackInput
+import com.badmanners.animurglar.pipeline.MergeSubtitleTrackKind
 import com.badmanners.animurglar.pipeline.ProcessingDubTrackInput
 import com.badmanners.animurglar.pipeline.ProcessingEpisodeInput
 import com.badmanners.animurglar.pipeline.ProcessingErrorEnvelope
@@ -300,12 +302,36 @@ class ProcessingStoreFactory(
 
             reportProgress(ProcessingStage.MERGE, mergeItem)
             semaphore.withPermit {
+                val subtitleTracks = episode.subtitleTracks
+                    .sortedWith(compareBy({ it.sourceId.lowercase() }, { it.teamName.lowercase() }))
+                    .flatMapIndexed { index, track ->
+                        listOf(
+                            MergeSubtitleTrackInput(
+                                teamName = track.teamName,
+                                title = "${track.teamName} (Надписи)",
+                                languageTag = track.languageTag,
+                                subtitlePath = track.captionsOnlyPath,
+                                kind = MergeSubtitleTrackKind.CAPTIONS_ONLY,
+                                default = index == 0,
+                            ),
+                            MergeSubtitleTrackInput(
+                                teamName = track.teamName,
+                                title = track.teamName,
+                                languageTag = track.languageTag,
+                                subtitlePath = track.fullPath,
+                                kind = MergeSubtitleTrackKind.FULL,
+                                default = false,
+                            ),
+                        )
+                    }
                 ffmpegService.mergeEpisode(
                     request = MergeRequest(
                         input = EpisodeMergeInput(
                             episodeNumber = episode.episodeNumber,
                             videoPath = episode.rawVideoPath,
                             dubTracks = appliedDubTracks,
+                            subtitleTracks = subtitleTracks,
+                            subtitleFontPaths = episode.subtitleFontPaths,
                             outputPath = episodePaths.outputPath,
                         )
                     ),

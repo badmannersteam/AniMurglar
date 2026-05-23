@@ -2,6 +2,7 @@ package com.badmanners.animurglar.downloader
 
 import com.badmanners.animurglar.dubs.DubInfo
 import com.badmanners.animurglar.nyaa.TorrentCandidate
+import com.badmanners.animurglar.subtitles.SubtitleTeamInfo
 
 data class DownloadRequest(
     val title: String,
@@ -9,6 +10,7 @@ data class DownloadRequest(
     val selectedEpisodes: Set<Int>,
     val selectedDubs: List<DubInfo>,
     val episodeMapping: EpisodeMapping,
+    val selectedSubtitles: List<SubtitleTeamInfo>
 )
 
 data class DownloadProgressEvent(
@@ -26,5 +28,6 @@ data class DownloadProgressEvent(
     enum class DownloadProgressGroup {
         TORRENT_FILES,
         DUB_FILES,
+        SUBTITLE_FILES,
     }
 }

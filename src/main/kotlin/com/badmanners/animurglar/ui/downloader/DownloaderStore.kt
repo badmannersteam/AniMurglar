@@ -42,6 +42,7 @@ interface DownloaderStore : Store<Intent, State, Label> {
         val error: String? = null,
         val torrentProgress: List<ProgressItem> = emptyList(),
         val dubProgress: List<ProgressItem> = emptyList(),
+        val subtitleProgress: List<ProgressItem> = emptyList(),
     )
 
     sealed interface Message {
@@ -110,6 +111,7 @@ class DownloaderStoreFactory(
                     error = null,
                     torrentProgress = emptyList(),
                     dubProgress = emptyList(),
+                    subtitleProgress = emptyList(),
                 )
 
                 is Message.ProgressReported -> {
@@ -129,6 +131,10 @@ class DownloaderStoreFactory(
 
                         DownloadProgressGroup.DUB_FILES -> copy(
                             dubProgress = dubProgress.upsert(item) { it.key == item.key },
+                        )
+
+                        DownloadProgressGroup.SUBTITLE_FILES -> copy(
+                            subtitleProgress = subtitleProgress.upsert(item) { it.key == item.key },
                         )
                     }
                 }
