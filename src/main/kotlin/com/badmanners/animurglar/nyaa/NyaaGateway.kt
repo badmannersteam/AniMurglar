@@ -300,7 +300,10 @@ class NyaaGateway(private val client: HttpClient) {
             if (effectiveCategory == TorrentCategory.SEASON_PACK) {
                 val sortedEpisodes = entry.episodeMediaFiles.keys.sorted()
                 seasonCandidates += TorrentCandidate.SeasonPack(
-                    entry = entry.copy(metadata = entry.metadata.copy(category = TorrentCategory.SEASON_PACK)),
+                    entry = entry.copy(
+                        metadata = entry.metadata.copy(category = TorrentCategory.SEASON_PACK),
+                        totalSizeBytes = entry.episodeMediaFiles.values.sumOf { it.sizeBytes }
+                    ),
                     episodes = sortedEpisodes,
                 )
                 continue
@@ -347,17 +350,7 @@ class NyaaGateway(private val client: HttpClient) {
             )
         }
 
-        return (seasonCandidates + groupedCandidates).filter { candidate ->
-            (candidate.episodes.size in (episodesAired - 2)..episodesAired)/*.also {
-                if (!it) when (candidate) {
-                    is TorrentCandidate.SeasonPack -> candidate.entry.episodeMediaFiles.values
-                        .forEach { logger.debug(it.fullPathInTorrent) }
-                    is TorrentCandidate.EpisodeGroup -> candidate.group.episodes.values
-                        .flatMap { it.episodeMediaFiles.values }
-                        .forEach { logger.debug(it.fullPathInTorrent) }
-                }
-            }*/
-        }.sortedWith(
+        return (seasonCandidates + groupedCandidates).sortedWith(
             compareByDescending<TorrentCandidate> { it.episodes.size == episodesAired }
                 .thenByDescending { it.candidateSeasonSizeBytes() }
         )
