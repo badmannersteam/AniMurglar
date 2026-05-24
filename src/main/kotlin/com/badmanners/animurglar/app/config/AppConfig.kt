@@ -1,8 +1,9 @@
 package com.badmanners.animurglar.app.config
 
+import com.badmanners.animurglar.utils.OS
+import com.badmanners.animurglar.utils.os
+import java.io.File
 import java.nio.file.Path
-import java.nio.file.Paths
-import kotlin.io.path.absolute
 import kotlin.io.path.createDirectories
 
 data class AppConfig(
@@ -20,9 +21,21 @@ data class AppConfig(
     }
 
     companion object {
-        fun load(): AppConfig {
-            val appHome = (System.getProperty("jpackage.app-path")?.let { Paths.get(it) }
-                ?: Paths.get(".").absolute()).parent
+        fun load(workDir: String? = null): AppConfig {
+            val appHome = workDir?.let { Path.of(it) }
+                ?: run {
+                    val jpackagePath = System.getProperty("jpackage.app-path")
+                    val executablePath = when {
+                        jpackagePath == null -> File(object {}::class.java.protectionDomain.codeSource.location.toURI())
+                        os == OS.WINDOWS -> File(jpackagePath)
+                        os == OS.LINUX -> File(System.getenv("APPIMAGE"))
+                        os == OS.MACOS -> File(jpackagePath).parentFile.parentFile.parentFile
+                        else -> null
+                    }
+
+                    (executablePath?.parentFile ?: File(".")).toPath()
+                }
+
 
             return AppConfig(
                 tempDir = appHome.resolve("temp"),

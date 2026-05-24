@@ -14,6 +14,8 @@ import com.badmanners.animurglar.ffmpeg.initializeFfmpeg
 import com.badmanners.animurglar.generated.resources.Res
 import com.badmanners.animurglar.generated.resources.icon
 import com.badmanners.animurglar.ui.root.RootScreen
+import com.badmanners.animurglar.utils.OS
+import com.badmanners.animurglar.utils.os
 import com.materialkolor.DynamicMaterialTheme
 import com.materialkolor.PaletteStyle
 import com.materialkolor.dynamiccolor.ColorSpec
@@ -23,11 +25,11 @@ import org.jetbrains.compose.resources.painterResource
 import org.koin.core.context.startKoin
 
 
-fun main() {
-    if (!System.getProperty("os.name").startsWith("Mac", true))
+fun main(args: Array<String>) {
+    if (os != OS.MACOS)
         System.setProperty("skiko.renderApi", "OPENGL")
 
-    val appConfig = AppConfig.load()
+    val appConfig = AppConfig.load(args.lastOrNull())
     appConfig.prepareWorkDirectories()
 
     AppLogging.initialize(appConfig.logsDir)
@@ -57,7 +59,9 @@ fun main() {
                 specVersion = ColorSpec.SpecVersion.SPEC_2025
             ) {
                 CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
-                    RootScreen(koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get())
+                    with(koin) {
+                        RootScreen(get(), get(), get(), get(), get(), get(), get(), get())
+                    }
                 }
             }
         }
