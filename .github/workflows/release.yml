@@ -49,7 +49,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: murglar-${{ matrix.variant.uberjar && 'uberjar' || format('{0}-{1}', runner.os, runner.arch) }}
+          name: AniMurglar-${{ matrix.variant.uberjar && 'uberjar' || format('{0}-{1}', runner.os, runner.arch) }}
           path: build/artifacts/
 
   release:
@@ -77,11 +77,11 @@ jobs:
           previous_tag="$(git describe --tags --abbrev=0 "${current_tag}^" 2>/dev/null || true)"
 
           if [ -z "$previous_tag" ]; then
-            echo "## Changes" > release-notes.md
+            echo "## Изменения" > release-notes.md
             echo "" >> release-notes.md
             git log --pretty=format:'- %s (%h)' "$current_tag" >> release-notes.md
           else
-            echo "## Changes since $previous_tag" > release-notes.md
+            echo "## Изменения с $previous_tag" > release-notes.md
             echo "" >> release-notes.md
             git log --pretty=format:'- %s (%h)' "$previous_tag..$current_tag" >> release-notes.md
           fi
