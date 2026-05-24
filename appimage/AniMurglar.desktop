@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=AniMurglar
+Comment=Anime downloader
+Exec=AniMurglar
+Icon=icon
+Type=Application
+Categories=Video;

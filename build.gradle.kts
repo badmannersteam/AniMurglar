@@ -1,4 +1,10 @@
+import org.gradle.kotlin.dsl.support.serviceOf
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpClient.Redirect
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse.BodyHandlers
 
 plugins {
     kotlin("jvm") version "2.3.10"
@@ -39,8 +45,17 @@ val os = run {
     }
 }
 
+val isUberJarBuild = System.getenv("UBERJAR_BUILD") == "true"
+
 dependencies {
-    implementation(compose.desktop.currentOs)
+    if (isUberJarBuild) {
+        implementation(compose.desktop.windows_x64)
+        implementation(compose.desktop.linux_x64)
+        implementation(compose.desktop.linux_arm64)
+        implementation(compose.desktop.macos_x64)
+        implementation(compose.desktop.macos_arm64)
+    } else
+        implementation(compose.desktop.currentOs)
     implementation("org.jetbrains.compose.components:components-resources:1.10.3")
     implementation("org.jetbrains.compose.material3:material3:1.10.0-alpha05")
     implementation("com.materialkolor:material-kolor:4.1.1")
@@ -91,13 +106,6 @@ tasks.test {
     useJUnitPlatform()
 }
 
-tasks.register<Zip>("zipReleaseAppImage") {
-    dependsOn("packageReleaseAppImage")
-    from(layout.buildDirectory.dir("compose/binaries/main-release/app/AniMurglar"))
-    archiveFileName = "AniMurglar-Desktop-$version-${os.classifier}-${arch.classifier}.zip"
-    destinationDirectory = layout.buildDirectory.dir("artifacts")
-}
-
 compose.desktop {
     application {
         mainClass = "com.badmanners.animurglar.MainKt"
@@ -113,7 +121,9 @@ compose.desktop {
             packageName = "AniMurglar"
             description = "AniMurglar"
             vendor = "badmannersteam"
-            targetFormats(TargetFormat.AppImage)
+
+            targetFormats(if (os == OS.MACOS) TargetFormat.Dmg else TargetFormat.AppImage)
+
             modules("java.management")
 
             windows {
@@ -128,4 +138,122 @@ compose.desktop {
             }
         }
     }
+}
+
+tasks.register<Zip>("zipReleaseAppImage") {
+    dependsOn("packageReleaseAppImage")
+    from(layout.buildDirectory.dir("compose/binaries/main-release/app/AniMurglar"))
+    archiveFileName = "AniMurglar-$version-${os.classifier}-${arch.classifier}.zip"
+    destinationDirectory = layout.buildDirectory.dir("artifacts")
+}
+
+tasks.register<Copy>("packageReleaseUberJar") {
+    dependsOn("packageReleaseUberJarForCurrentOS")
+    from(layout.buildDirectory.dir("compose/jars"))
+    include("*-release.jar")
+    into(layout.buildDirectory.dir("artifacts"))
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    rename { "AniMurglar-$version-all-platforms.jar" }
+}
+
+if (os == OS.MACOS) tasks.register<Copy>("copyReleaseDmg") {
+    dependsOn("packageReleaseDmg")
+    from(layout.buildDirectory.dir("compose/binaries/main-release/dmg"))
+    include("*.dmg")
+    into(layout.buildDirectory.dir("artifacts"))
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    rename { "AniMurglar-$version-${os.classifier}-${arch.classifier}.dmg" }
+}
+
+if (os == OS.LINUX) tasks.register("packageReleaseLinuxAppImage") {
+    dependsOn("packageReleaseAppImage")
+    doLast {
+        val appImageTmpDir = layout.buildDirectory.dir("tmp/appimage").get().asFile
+        val appDir = appImageTmpDir.resolve("AniMurglar.AppDir")
+
+        println("Copying application files...")
+        val usrDir = appDir.resolve("usr")
+        usrDir.mkdirs()
+        copy {
+            from(layout.buildDirectory.dir("compose/binaries/main-release/app/AniMurglar"))
+            into(usrDir)
+        }
+
+        println("Copying AppRun script...")
+        copy {
+            from(layout.projectDirectory.file("appimage/AppRun"))
+            into(appDir)
+            filePermissions { unix("755") }
+        }
+
+        println("Copying .desktop file...")
+        val desktopFile = layout.projectDirectory.file("appimage/AniMurglar.desktop")
+        copy {
+            from(desktopFile)
+            into(appDir)
+        }
+        val applicationsDir = appDir.resolve("usr/share/applications")
+        applicationsDir.mkdirs()
+        copy {
+            from(desktopFile)
+            into(applicationsDir)
+        }
+
+        println("Copying icon file...")
+        val iconFile = layout.projectDirectory.file("icons/icon.png")
+        copy {
+            from(iconFile)
+            into(appDir)
+        }
+        val iconsDir = appDir.resolve("usr/share/icons/hicolor/512x512/apps")
+        iconsDir.mkdirs()
+        copy {
+            from(iconFile)
+            into(iconsDir)
+        }
+
+        val appImageTool = appImageTmpDir.resolve("appimagetool-x86_64.AppImage")
+        if (!appImageTool.exists()) {
+            println("Downloading appimagetool...")
+            HttpClient.newBuilder().followRedirects(Redirect.ALWAYS).build().use { client ->
+                val request = HttpRequest.newBuilder(
+                    URI.create(
+                        "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+                    )
+                ).build()
+                client.send(request, BodyHandlers.ofFile(appImageTool.toPath())).body()
+            }
+            appImageTool.setExecutable(true)
+        }
+
+        println("Building AppImage...")
+        serviceOf<ExecOperations>().exec {
+            environment("ARCH", "x86_64")
+            environment("APPIMAGE_EXTRACT_AND_RUN", "1")
+            workingDir = appImageTmpDir
+            commandLine = listOf(
+                appImageTool.absolutePath,
+                "--verbose",
+                appDir.absolutePath
+            )
+        }
+
+        println("AppImage created successfully")
+        copy {
+            from(appImageTmpDir.resolve("AniMurglar-x86_64.AppImage"))
+            into(layout.buildDirectory.dir("artifacts"))
+            rename { "AniMurglar-$version-${os.classifier}-${arch.classifier}.appimage" }
+        }
+    }
+}
+
+tasks.register("release") {
+    dependsOn(
+        when {
+            isUberJarBuild -> "packageReleaseUberJar"
+            os == OS.MACOS -> "copyReleaseDmg"
+            os == OS.LINUX -> "packageReleaseLinuxAppImage"
+            else -> "zipReleaseAppImage"
+        }
+    )
 }
