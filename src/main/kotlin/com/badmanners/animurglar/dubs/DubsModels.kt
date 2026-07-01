@@ -1,21 +1,26 @@
 package com.badmanners.animurglar.dubs
 
+import kotlinx.serialization.Serializable
+
 enum class DubEpisodeFormat {
     MP4, HLS
 }
 
+@Serializable
 data class DubEpisode(
     val episodeNumber: Int,
     val sourceUrl: String,
     val format: DubEpisodeFormat
 )
 
+@Serializable
 data class ResolvedDubEpisode(
     val episodeNumber: Int,
     val resolvedUrl: String,
     val format: DubEpisodeFormat
 )
 
+@Serializable
 data class DubAnimeCandidate(
     val sourceId: String,
     val id: String,
@@ -29,6 +34,7 @@ data class DubAnimeCandidate(
         get() = "$sourceId:$id"
 }
 
+@Serializable
 data class DubInfo(
     val sourceId: String,
     val teamName: String,

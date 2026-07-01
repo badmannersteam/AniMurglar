@@ -1,6 +1,7 @@
 package com.badmanners.animurglar.dubs
 
 import com.badmanners.animurglar.utils.BROWSER_USER_AGENT
+import com.badmanners.animurglar.utils.executeWithProxyFallback
 import com.badmanners.animurglar.utils.json
 import com.badmanners.animurglar.utils.normalizeUrl
 import com.badmanners.animurglar.utils.string
@@ -21,7 +22,7 @@ import kotlin.text.RegexOption.DOT_MATCHES_ALL
 import kotlin.text.RegexOption.IGNORE_CASE
 
 
-class KodikGateway(private val client: HttpClient) {
+class KodikGateway(private val client: HttpClient, private val directClient: HttpClient, private val config: com.badmanners.animurglar.app.config.AppConfig) {
 
     private val logger = LogManager.getLogger(KodikGateway::class.java)
 
@@ -65,31 +66,33 @@ class KodikGateway(private val client: HttpClient) {
             else -> "https://$KODIK_DOMAIN/$endpointPath"
         }
 
-        val body = client.submitForm(
-            url = endpointUrl,
-            formParameters = Parameters.build {
-                append("d", signedParams.domain)
-                append("d_sign", signedParams.domainSign)
-                append("pd", signedParams.playerDomain)
-                append("pd_sign", signedParams.playerDomainSign)
-                append("ref", signedParams.referrer)
-                append("ref_sign", signedParams.referrerSign)
-                append("bad_user", "false")
-                append("cdn_is_working", "true")
-                append("type", videoInfo.type)
-                append("hash", videoInfo.hash)
-                append("id", videoInfo.id)
-                append("info", "{}")
-            }
-        ) {
-            headers {
-                append("origin", KODIK_ORIGIN)
-                append("referer", referer)
-                append("accept", "application/json, text/javascript, */*; q=0.01")
-                append("x-requested-with", "XMLHttpRequest")
-                append("user-agent", BROWSER_USER_AGENT)
-            }
-        }.bodyAsText()
+        val body = client.executeWithProxyFallback(directClient) {
+            submitForm(
+                url = endpointUrl,
+                formParameters = Parameters.build {
+                    append("d", signedParams.domain)
+                    append("d_sign", signedParams.domainSign)
+                    append("pd", signedParams.playerDomain)
+                    append("pd_sign", signedParams.playerDomainSign)
+                    append("ref", signedParams.referrer)
+                    append("ref_sign", signedParams.referrerSign)
+                    append("bad_user", "false")
+                    append("cdn_is_working", "true")
+                    append("type", videoInfo.type)
+                    append("hash", videoInfo.hash)
+                    append("id", videoInfo.id)
+                    append("info", "{}")
+                }
+            ) {
+                headers {
+                    append("origin", KODIK_ORIGIN)
+                    append("referer", referer)
+                    append("accept", "application/json, text/javascript, */*; q=0.01")
+                    append("x-requested-with", "XMLHttpRequest")
+                    append("user-agent", BROWSER_USER_AGENT)
+                }
+            }.bodyAsText()
+        }
 
         val root = json.decodeFromString<JsonObject>(body)
         return root["links"]?.jsonObject
@@ -111,14 +114,27 @@ class KodikGateway(private val client: HttpClient) {
             ?: error("No decodable Kodik links found.")
     }
 
-    private suspend fun loadText(url: String, referer: String, origin: String): String =
-        client.get(url) {
-            headers {
-                append("origin", origin)
-                append("referer", referer)
-                append("user-agent", BROWSER_USER_AGENT)
+    private suspend fun loadText(url: String, referer: String, origin: String): String {
+        val proxy = config.proxy
+        val body = client.executeWithProxyFallback(directClient) {
+            val text = get(url) {
+                headers {
+                    append("origin", origin)
+                    append("referer", referer)
+                    append("user-agent", BROWSER_USER_AGENT)
+                }
+            }.bodyAsText()
+            if (url.contains(KODIK_DOMAIN) && text.length < 2000 && text.contains("запрещено к просмотру в данной стране")) {
+                error("Kodik: video is geo-blocked in the proxy's country. Try a proxy in Russia/CIS.")
             }
-        }.bodyAsText()
+            text
+        }
+        if (url.contains(KODIK_DOMAIN)) {
+            val proxyInfo = if (proxy.enabled && proxy.host.isNotBlank()) "${proxy.type}://${proxy.host}:${proxy.port}" else "direct"
+            logger.debug("Kodik response from {} via {} ({} chars)", url, proxyInfo, body.length)
+        }
+        return body
+    }
 
     private fun buildKodikPostReferer(sourceUrl: String): String {
         val querySeparator = if ('?' in sourceUrl) '&' else '?'
@@ -126,8 +142,15 @@ class KodikGateway(private val client: HttpClient) {
     }
 
     private fun extractPlayerScriptPath(html: String): String {
+        if (html.length < 2000) {
+            logger.warn("Kodik returned a short/error page ({} chars).", html.length)
+            error("Kodik returned a short/error page.")
+        }
         val match = PLAYER_SCRIPT_REGEX.find(html)
-            ?: error("Kodik player script path not found.")
+        if (match == null) {
+            logger.warn("Kodik player script not found in page ({} chars).", html.length)
+            error("Kodik player script not found.")
+        }
         return match.groupValues[1]
     }
 
@@ -276,7 +299,7 @@ class KodikGateway(private val client: HttpClient) {
         private const val MAX_SHIFT = ALPHABET_SIZE
 
         private val PLAYER_SCRIPT_REGEX = Regex(
-            """<script\s*type="text/javascript"\s*src="(/assets/js/app\.player_single[^"]+)""", IGNORE_CASE
+            """<script[^>]+src="(/assets/js/app\.player_single[^"]+)"[^>]*>""", IGNORE_CASE
         )
         private val ENDPOINT_REGEX = Regex("""\$\.ajax\([^>]+,url:\s*atob\(["']([\w=]+)["']\)""", DOT_MATCHES_ALL)
         private val URL_PARAMS_REGEX = Regex("""var\s+urlParams\s*=\s*'([^']+)';""")

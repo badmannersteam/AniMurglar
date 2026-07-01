@@ -17,9 +17,21 @@
             </Policies>
             <DefaultRolloverStrategy max="5"/>
         </RollingFile>
+        <RollingFile name="RequestAppender"
+                     fileName="${LOG_DIR}/requests.log"
+                     filePattern="${LOG_DIR}/requests-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %msg%n"/>
+            <Policies>
+                <SizeBasedTriggeringPolicy size="10 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="5"/>
+        </RollingFile>
     </Appenders>
 
     <Loggers>
+        <Logger name="Requests" level="info" additivity="false">
+            <AppenderRef ref="RequestAppender"/>
+        </Logger>
         <Root level="debug">
             <AppenderRef ref="Console"/>
             <AppenderRef ref="FileAppender"/>

@@ -1,6 +1,9 @@
 package com.badmanners.animurglar.subtitles
 
+import com.badmanners.animurglar.app.config.AppConfig
 import com.badmanners.animurglar.utils.BROWSER_USER_AGENT
+import com.badmanners.animurglar.utils.SearchCache
+import com.badmanners.animurglar.utils.executeWithProxyFallback
 import com.badmanners.animurglar.utils.json
 import com.badmanners.animurglar.utils.normalizeUrl
 import com.badmanners.animurglar.utils.suspendRunCatching
@@ -10,6 +13,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -21,14 +25,40 @@ import org.jsoup.nodes.Element
 
 class Anime365SubtitlesGateway(
     private val client: HttpClient,
+    private val directClient: HttpClient,
+    private val config: AppConfig,
+    private val searchCache: SearchCache,
 ) {
 
     private val logger = LogManager.getLogger(Anime365SubtitlesGateway::class.java)
     private val noRedirectClient = client.config {
         followRedirects = false
     }
+    private val noRedirectDirectClient = directClient.config {
+        followRedirects = false
+    }
+
+    private fun proxyInfo(): String {
+        val proxy = config.proxy
+        return if (proxy.enabled && proxy.host.isNotBlank()) "${proxy.type}://${proxy.host}:${proxy.port}" else "direct"
+    }
 
     suspend fun loadTeams(shikimoriUrl: String): List<SubtitleTeamInfo> {
+        return searchCache.getOrPut(
+            key = "anime365:$shikimoriUrl",
+            ttlDays = config.cache.searchCacheTtlDays,
+            serializer = { results ->
+                json.encodeToString(ListSerializer(SubtitleTeamInfo.serializer()), results)
+            },
+            deserializer = { data ->
+                json.decodeFromString(ListSerializer(SubtitleTeamInfo.serializer()), data)
+            },
+        ) {
+            loadTeamsInternal(shikimoriUrl)
+        }
+    }
+
+    private suspend fun loadTeamsInternal(shikimoriUrl: String): List<SubtitleTeamInfo> {
         val catalogPage = loadCatalogPage(shikimoriUrl)
         val episodePages = parseEpisodePages(catalogPage)
         val episodesByTeam = mutableMapOf<String, MutableMap<Int, SubtitleEpisode>>()
@@ -61,9 +91,11 @@ class Anime365SubtitlesGateway(
 
     suspend fun resolveEpisode(episode: SubtitleEpisode): ResolvedSubtitleEpisode? {
         val embedUrl = "$ANIME365_ORIGIN/translations/embed/${episode.translationId}"
-        val html = client.get(embedUrl) {
-            anime365Headers(referer = episode.pageUrl)
-        }.bodyAsText()
+        val html = client.executeWithProxyFallback(directClient) {
+            get(embedUrl) {
+                anime365Headers(referer = episode.pageUrl)
+            }.bodyAsText()
+        }
         val video = Jsoup.parse(html, embedUrl).selectFirst("video#main-video") ?: return null
         val subtitlesUrl = video.attr("data-subtitles")
             .let(::absoluteAnime365Url)
@@ -79,28 +111,34 @@ class Anime365SubtitlesGateway(
     }
 
     private suspend fun loadCatalogPage(shikimoriUrl: String): Document {
-        val html = client.get("$ANIME365_ORIGIN/catalog/search") {
-            url {
-                parameters.append("q", shikimoriUrl)
-                parameters.append("dynpage", "1")
-            }
-            anime365Headers()
-        }.bodyAsText()
+        val html = client.executeWithProxyFallback(directClient) {
+            get("$ANIME365_ORIGIN/catalog/search") {
+                url {
+                    parameters.append("q", shikimoriUrl)
+                    parameters.append("dynpage", "1")
+                }
+                anime365Headers()
+            }.bodyAsText()
+        }
 
+        logger.debug("Anime365 catalog response via {} ({} chars)", proxyInfo(), html.length)
         return Jsoup.parse(html, ANIME365_ORIGIN)
     }
 
     private suspend fun loadEpisodeSubtitles(episodePage: Anime365EpisodePage): List<Anime365EpisodeSubtitle> {
         val subtitlesPageUrl = loadEpisodeSubtitlesPageUrl(episodePage) ?: return emptyList()
-        val html = client.get(subtitlesPageUrl) {
-            anime365Headers(referer = episodePage.pageUrl)
-        }.bodyAsText()
+        val html = client.executeWithProxyFallback(directClient) {
+            get(subtitlesPageUrl) {
+                anime365Headers(referer = episodePage.pageUrl)
+            }.bodyAsText()
+        }
 
         return parseEpisodeSubtitles(Jsoup.parse(html, subtitlesPageUrl), episodePage)
     }
 
     private suspend fun loadEpisodeSubtitlesPageUrl(episodePage: Anime365EpisodePage): String? {
-        val response = noRedirectClient.get(episodePage.russianSubtitlesUrl) {
+        val noRedirect = if (proxyEnabled()) noRedirectClient else noRedirectDirectClient
+        val response = noRedirect.get(episodePage.russianSubtitlesUrl) {
             url {
                 parameters.append("dynpage", "1")
             }
@@ -114,6 +152,8 @@ class Anime365SubtitlesGateway(
             else -> null
         }
     }
+
+    private fun proxyEnabled(): Boolean = config.proxy.enabled && config.proxy.host.isNotBlank()
 
     private fun parseEpisodePages(document: Document) = document.select("a.m-episode-item")
         .mapNotNull { link ->

@@ -37,31 +37,39 @@ import com.badmanners.animurglar.ui.shikimori.ShikimoriStore
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStoreFactory
 import com.badmanners.animurglar.ui.subtitles.SubtitlesPickerStore
 import com.badmanners.animurglar.ui.subtitles.SubtitlesPickerStoreFactory
+import com.badmanners.animurglar.utils.SearchCache
+import com.badmanners.animurglar.utils.SearchHistory
+import org.koin.core.qualifier.named
 import org.koin.dsl.module
 
 fun appModule(config: AppConfig) = module {
 
     single { config }
 
-    single { httpClient(config) }
+    single { SearchCache(config.logsDir, config.cache.searchCacheTtlDays) }
+    single { SearchHistory(config.logsDir, config.cache.searchHistoryTtlDays) }
 
-    single { NyaaGateway(get()) }
+    single(qualifier = named("proxy")) { httpClient(config) }
 
-    single { ShikimoriGateway(get()) }
+    single(qualifier = named("direct")) { httpClient(config.copy(proxy = config.proxy.copy(enabled = false))) }
 
-    single { KodikGateway(get()) }
+    single { NyaaGateway(get(qualifier = named("proxy")), get(qualifier = named("direct")), get(), get()) }
 
-    single { AnimeLibDubsSource(get(), get()) }
-    single { YummyAnimeDubsSource(get(), get()) }
+    single { ShikimoriGateway(get(qualifier = named("proxy")), get(qualifier = named("direct")), get(), get()) }
+
+    single { KodikGateway(get(qualifier = named("proxy")), get(qualifier = named("direct")), get()) }
+
+    single { AnimeLibDubsSource(get(qualifier = named("proxy")), get(qualifier = named("direct")), get(), get(), get()) }
+    single { YummyAnimeDubsSource(get(qualifier = named("proxy")), get(qualifier = named("direct")), get(), get(), get()) }
 
     single { DubsGateway(listOf(get<AnimeLibDubsSource>(), get<YummyAnimeDubsSource>())) }
 
-    single { Anime365SubtitlesGateway(get()) }
+    single { Anime365SubtitlesGateway(get(qualifier = named("proxy")), get(qualifier = named("direct")), get(), get()) }
     single { SubtitleCaptionFilterService() }
 
     single<StoreFactory> { DefaultStoreFactory() }
 
-    single<ShikimoriStore> { ShikimoriStoreFactory(get(), get()).create() }
+    single<ShikimoriStore> { ShikimoriStoreFactory(get(), get(), get()).create() }
     single<NyaaPickerStore> { NyaaPickerStoreFactory(get(), get()).create() }
     single<DubsPickerStore> { DubsPickerStoreFactory(get(), get()).create() }
     single<SubtitlesPickerStore> { SubtitlesPickerStoreFactory(get(), get()).create() }
@@ -74,11 +82,11 @@ fun appModule(config: AppConfig) = module {
     single { FfmpegService() }
     single { SyncAnalyzeService(get()) }
     single { SyncChartService() }
-    single { TorrentDownloadService(get(), get()) }
-    single { DirectDownloader(get(), get()) }
-    single { HlsDownloader(get(), get(), get()) }
+    single { TorrentDownloadService(get(qualifier = named("proxy")), get(qualifier = named("direct")), get()) }
+    single { DirectDownloader(get(qualifier = named("proxy")), get(qualifier = named("direct")), get(), get()) }
+    single { HlsDownloader(get(qualifier = named("proxy")), get(qualifier = named("direct")), get(), get()) }
     single { DubDownloadService(get(), get(), get(), get()) }
-    single { SubtitleDownloadService(get(), get(), get()) }
+    single { SubtitleDownloadService(get(qualifier = named("proxy")), get(qualifier = named("direct")), get(), get(), get()) }
     single { DownloadCoordinator(get(), get(), get(), get()) }
 }
 

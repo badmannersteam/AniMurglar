@@ -1,6 +1,7 @@
 package com.badmanners.animurglar.ui.shikimori
 
 import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,10 +68,21 @@ fun ShikimoriScreen(
                         Text("Название аниме")
                     },
                     trailingIcon = {
-                        if (state.isSearchBarActive)
-                            TextButton(onClick = { shikimoriStore.accept(Intent.SearchPressed(query = state.query)) }) {
-                                Text("Найти")
+                        if (state.isSearchBarActive) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (state.query.isNotEmpty()) {
+                                    TextButton(onClick = { shikimoriStore.accept(Intent.QueryChanged(value = "")) }) {
+                                        Text("\u2715")
+                                    }
+                                }
+                                TextButton(onClick = { shikimoriStore.accept(Intent.SearchPressed(query = state.query)) }) {
+                                    Text("\u041D\u0430\u0439\u0442\u0438")
+                                }
+                                TextButton(onClick = { shikimoriStore.accept(Intent.SearchBarActiveChanged(active = false)) }) {
+                                    Text("\u25BC")
+                                }
                             }
+                        }
                     },
                 )
             },
@@ -83,6 +95,25 @@ fun ShikimoriScreen(
         ) {
             if (state.isLoading) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+
+            if (state.searchSuggestions.isNotEmpty() && state.searchResults.isEmpty() && !state.isLoading) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                ) {
+                    state.searchSuggestions.forEach { suggestion ->
+                        Text(
+                            text = suggestion,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    shikimoriStore.accept(Intent.SearchPressed(query = suggestion))
+                                }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        )
+                    }
+                }
             }
 
             if (state.searchResults.isNotEmpty()) {
@@ -132,11 +163,51 @@ fun ShikimoriScreen(
         }
 
         state.searchResults.firstOrNull { it.id == state.selectedAnimeId }?.let {
-            ShikimoriResultEntry(
-                anime = it,
-                onClick = { shikimoriStore.accept(Intent.SearchBarActiveChanged(active = true)) },
+            ElevatedCard(
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = it.russian,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { shikimoriStore.accept(Intent.SelectionCleared) }) {
+                            Text("\u2715")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Bottom,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = listOfNotNull(it.licenseNameRu, it.name, it.english).joinToString(" • "),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                text = listOfNotNull(it.japanese, *it.synonyms.toTypedArray()).joinToString(" • "),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        TextButton(onClick = { openInBrowser(it.url) }) {
+                            Text("Открыть")
+                        }
+                    }
+                }
+            }
         }
     }
 }

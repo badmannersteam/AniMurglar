@@ -9,6 +9,7 @@ import java.net.http.HttpResponse.BodyHandlers
 plugins {
     kotlin("jvm") version "2.3.10"
     kotlin("plugin.compose") version "2.3.10"
+    kotlin("plugin.serialization") version "2.3.10"
     id("org.jetbrains.compose") version "1.10.3"
 }
 
@@ -110,10 +111,12 @@ compose.desktop {
     application {
         mainClass = "com.badmanners.animurglar.MainKt"
 
+        val enableObfuscation = project.findProperty("obfuscate")?.toString()?.toBoolean() ?: true
+
         buildTypes.release.proguard {
             version = "7.9.1"
             configurationFiles.from(project.file("proguard-rules.pro"))
-            obfuscate = true
+            obfuscate = enableObfuscation
             joinOutputJars = true
         }
 
@@ -142,8 +145,23 @@ compose.desktop {
 
 tasks.register<Zip>("zipReleaseAppImage") {
     dependsOn("packageReleaseAppImage")
-    from(layout.buildDirectory.dir("compose/binaries/main-release/app/AniMurglar"))
+    from(layout.buildDirectory.dir("compose/binaries/main-release/app/AniMurglar")) {
+        exclude("temp/**")
+        exclude("output/**")
+        exclude("logs/**")
+    }
     archiveFileName = "AniMurglar-$version-${os.classifier}-${arch.classifier}.zip"
+    destinationDirectory = layout.buildDirectory.dir("artifacts")
+}
+
+tasks.register<Zip>("zipAppImage") {
+    dependsOn("createDistributable")
+    from(layout.buildDirectory.dir("compose/binaries/main/app/AniMurglar")) {
+        exclude("temp/**")
+        exclude("output/**")
+        exclude("logs/**")
+    }
+    archiveFileName = "AniMurglar-$version-${os.classifier}-${arch.classifier}-no-proguard.zip"
     destinationDirectory = layout.buildDirectory.dir("artifacts")
 }
 
@@ -253,7 +271,11 @@ tasks.register("release") {
             isUberJarBuild -> "packageReleaseUberJar"
             os == OS.MACOS -> "copyReleaseDmg"
             os == OS.LINUX -> "packageReleaseLinuxAppImage"
-            else -> "zipReleaseAppImage"
+            else -> "createReleaseDistributable"
         }
     )
+}
+
+tasks.register("releaseNoProguard") {
+    dependsOn("createDistributable")
 }
