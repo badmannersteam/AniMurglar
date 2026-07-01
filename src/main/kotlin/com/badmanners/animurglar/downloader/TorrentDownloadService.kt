@@ -21,6 +21,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 class TorrentDownloadService(
     private val client: HttpClient,
+    private val directClient: HttpClient,
     private val config: AppConfig,
 ) {
     private val logger = LogManager.getLogger(TorrentDownloadService::class.java)
@@ -81,7 +82,7 @@ class TorrentDownloadService(
             username = qConfig.username,
             password = qConfig.password,
             syncInterval = 1500.milliseconds,
-            httpClient = client,
+            httpClient = directClient,
             dispatcher = Dispatchers.IO,
         )
 

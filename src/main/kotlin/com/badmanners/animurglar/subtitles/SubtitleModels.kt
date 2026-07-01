@@ -1,6 +1,9 @@
 package com.badmanners.animurglar.subtitles
 
+import kotlinx.serialization.Serializable
 
+
+@Serializable
 data class SubtitleTeamInfo(
     val sourceId: String,
     val teamName: String,
@@ -10,6 +13,7 @@ data class SubtitleTeamInfo(
     val key = "$sourceId:$teamName"
 }
 
+@Serializable
 data class SubtitleEpisode(
     val episodeNumber: Int,
     val translationId: String,

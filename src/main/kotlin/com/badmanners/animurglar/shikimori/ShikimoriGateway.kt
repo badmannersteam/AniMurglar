@@ -1,5 +1,9 @@
 package com.badmanners.animurglar.shikimori
 
+import com.badmanners.animurglar.app.config.AppConfig
+import com.badmanners.animurglar.utils.RequestLogger
+import com.badmanners.animurglar.utils.SearchCache
+import com.badmanners.animurglar.utils.executeWithProxyFallback
 import com.badmanners.animurglar.utils.json
 import com.badmanners.animurglar.utils.int
 import com.badmanners.animurglar.utils.string
@@ -17,11 +21,34 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+import org.apache.logging.log4j.LogManager
 
 
-class ShikimoriGateway(private val client: HttpClient) {
+class ShikimoriGateway(private val client: HttpClient, private val directClient: HttpClient, private val config: AppConfig, private val searchCache: SearchCache) {
+
+    private val logger = LogManager.getLogger(ShikimoriGateway::class.java)
+
+    private fun proxyInfo(): String {
+        val proxy = config.proxy
+        return if (proxy.enabled && proxy.host.isNotBlank()) "${proxy.type}://${proxy.host}:${proxy.port}" else "direct"
+    }
 
     suspend fun search(query: String, limit: Int = DEFAULT_LIMIT): List<ShikimoriAnime> {
+        return searchCache.getOrPut(
+            key = "shikimori:$query:$limit",
+            ttlDays = config.cache.searchCacheTtlDays,
+            serializer = { results ->
+                json.encodeToString(kotlinx.serialization.builtins.ListSerializer(ShikimoriAnime.serializer()), results)
+            },
+            deserializer = { data ->
+                json.decodeFromString(kotlinx.serialization.builtins.ListSerializer(ShikimoriAnime.serializer()), data)
+            },
+        ) {
+            searchInternal(query, limit)
+        }
+    }
+
+    private suspend fun searchInternal(query: String, limit: Int): List<ShikimoriAnime> {
         val payload = buildJsonObject {
             put("query", GRAPHQL_QUERY)
             putJsonObject("variables") {
@@ -30,12 +57,15 @@ class ShikimoriGateway(private val client: HttpClient) {
             }
         }
 
-        val body = client.post(API_URL) {
-            header(HttpHeaders.ContentType, "application/json")
-            header(HttpHeaders.Accept, "application/json")
-            header(HttpHeaders.Origin, ORIGIN)
-            setBody(payload.toString())
-        }.bodyAsText()
+        val body = client.executeWithProxyFallback(directClient) {
+            RequestLogger.logRequest(API_URL, via = proxyInfo())
+            post(API_URL) {
+                header(HttpHeaders.ContentType, "application/json")
+                header(HttpHeaders.Accept, "application/json")
+                header(HttpHeaders.Origin, ORIGIN)
+                setBody(payload.toString())
+            }.bodyAsText()
+        }
 
         val root = json.decodeFromString<JsonObject>(body)
         val data = root["data"]?.jsonObject ?: return emptyList()

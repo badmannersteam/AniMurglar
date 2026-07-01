@@ -5,6 +5,7 @@ import com.badmanners.animurglar.downloader.DownloadProgressEvent.DownloadProgre
 import com.badmanners.animurglar.dubs.DubInfo
 import com.badmanners.animurglar.ffmpeg.FfmpegService
 import com.badmanners.animurglar.utils.deleteRecursivelyIfExists
+import com.badmanners.animurglar.utils.executeWithProxyFallback
 import com.iheartradio.m3u8.Encoding.UTF_8
 import com.iheartradio.m3u8.Format.EXT_M3U
 import com.iheartradio.m3u8.PlaylistParser
@@ -39,6 +40,7 @@ import kotlin.io.path.fileSize
 
 class HlsDownloader(
     private val client: HttpClient,
+    private val directClient: HttpClient,
     private val config: AppConfig,
     private val ffmpegService: FfmpegService,
 ) {
@@ -84,7 +86,8 @@ class HlsDownloader(
                         val segmentPath = chunksDir.resolve("${index.toString().padStart(5, '0')}.ts")
                         var reportedSegmentBytes = 0L
 
-                        client.prepareGet(segmentUrl) {
+                        val activeClient = if (config.proxy.enabled && config.proxy.host.isNotBlank()) client else directClient
+                        activeClient.prepareGet(segmentUrl) {
                             onDownload { bytesSentTotal, contentLength ->
                                 val currentSegmentBytes = bytesSentTotal.coerceAtLeast(0L)
                                 val delta = (currentSegmentBytes - reportedSegmentBytes).coerceAtLeast(0L)
@@ -231,7 +234,7 @@ class HlsDownloader(
     }
 
     private suspend fun parsePlaylist(url: String): Playlist {
-        val payload = client.get(url).body<ByteArray>()
+        val payload = client.executeWithProxyFallback(directClient) { get(url).body<ByteArray>() }
         return ByteArrayInputStream(payload).use { stream ->
             PlaylistParser(stream, EXT_M3U, UTF_8).parse()
         }

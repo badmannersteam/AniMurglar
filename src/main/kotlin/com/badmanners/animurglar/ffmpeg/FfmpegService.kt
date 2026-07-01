@@ -24,6 +24,7 @@ import kotlin.io.path.exists
 import kotlin.io.path.fileSize
 import kotlin.io.path.writeText
 import kotlin.math.abs
+import kotlin.time.Duration.Companion.milliseconds
 
 
 class FfmpegService {
@@ -214,7 +215,7 @@ class FfmpegService {
         )
 
         var nextInputIndex = 1
-        input.dubTracks.forEach {
+        input.dubTracks.forEach { _ ->
             arguments += listOf(
                 "-map", "$nextInputIndex:a:0", // Map each dub track in deterministic input order.
             )
@@ -225,7 +226,7 @@ class FfmpegService {
             "-map", "0:a?", // Keep all embedded original audio streams from the main input.
         )
 
-        input.subtitleTracks.forEach {
+        input.subtitleTracks.forEach { _ ->
             arguments += listOf(
                 "-map", "$nextInputIndex:s:0", // Map each downloaded subtitle track in deterministic input order.
             )
@@ -501,7 +502,7 @@ class FfmpegService {
             } catch (e: Throwable) {
                 lastError = e
                 if (attempt != OUTPUT_DELETE_ATTEMPTS - 1)
-                    delay(OUTPUT_DELETE_RETRY_DELAY_MS)
+                    delay(OUTPUT_DELETE_RETRY_DELAY)
             }
         }
 
@@ -552,7 +553,7 @@ class FfmpegService {
         const val EPSILON_SEC = 1e-6
         const val PROCESS_EXIT_WAIT_MS = 2000L
         const val OUTPUT_DELETE_ATTEMPTS = 3
-        const val OUTPUT_DELETE_RETRY_DELAY_MS = 1000L
+        val OUTPUT_DELETE_RETRY_DELAY = 1000.milliseconds
     }
 
     private sealed class TimelineChunk(

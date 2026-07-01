@@ -1,9 +1,13 @@
 package com.badmanners.animurglar.dubs
 
+import com.badmanners.animurglar.app.config.AppConfig
 import com.badmanners.animurglar.dubs.KodikGateway.Companion.KODIK_DEFAULT_QUALITY
 import com.badmanners.animurglar.dubs.KodikGateway.Companion.KODIK_ORIGIN
 import com.badmanners.animurglar.dubs.KodikGateway.Companion.KODIK_REFERER
 import com.badmanners.animurglar.utils.BROWSER_USER_AGENT
+import com.badmanners.animurglar.utils.RequestLogger
+import com.badmanners.animurglar.utils.SearchCache
+import com.badmanners.animurglar.utils.executeWithProxyFallback
 import com.badmanners.animurglar.utils.json
 import com.badmanners.animurglar.utils.normalizeUrl
 import com.badmanners.animurglar.utils.string
@@ -11,7 +15,9 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.statement.bodyAsText
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonObject
+import org.apache.logging.log4j.LogManager
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -19,12 +25,37 @@ import org.jsoup.nodes.Element
 
 class YummyAnimeDubsSource(
     private val client: HttpClient,
+    private val directClient: HttpClient,
     private val kodikGateway: KodikGateway,
+    private val config: AppConfig,
+    private val searchCache: SearchCache,
 ) : DubsSource {
+
+    private val logger = LogManager.getLogger(YummyAnimeDubsSource::class.java)
+
+    private fun proxyInfo(): String {
+        val proxy = config.proxy
+        return if (proxy.enabled && proxy.host.isNotBlank()) "${proxy.type}://${proxy.host}:${proxy.port}" else "direct"
+    }
 
     override val sourceId = "YummyAnime"
 
     override suspend fun searchAnime(query: String): List<DubAnimeCandidate> {
+        return searchCache.getOrPut(
+            key = "yummy:$query",
+            ttlDays = config.cache.searchCacheTtlDays,
+            serializer = { results ->
+                json.encodeToString(ListSerializer(DubAnimeCandidate.serializer()), results)
+            },
+            deserializer = { data ->
+                json.decodeFromString(ListSerializer(DubAnimeCandidate.serializer()), data)
+            },
+        ) {
+            searchAnimeInternal(query)
+        }
+    }
+
+    private suspend fun searchAnimeInternal(query: String): List<DubAnimeCandidate> {
         val firstPage = loadSearchPage(query = query, page = 1)
         val totalPages = parseTotalPages(firstPage)
 
@@ -41,6 +72,21 @@ class YummyAnimeDubsSource(
             "Unsupported dubs candidate source: ${candidate.sourceId}"
         }
 
+        return searchCache.getOrPut(
+            key = "yummy:dubs:${candidate.id}",
+            ttlDays = config.cache.searchCacheTtlDays,
+            serializer = { results ->
+                json.encodeToString(ListSerializer(DubInfo.serializer()), results)
+            },
+            deserializer = { data ->
+                json.decodeFromString(ListSerializer(DubInfo.serializer()), data)
+            },
+        ) {
+            loadDubsInternal(candidate)
+        }
+    }
+
+    private suspend fun loadDubsInternal(candidate: DubAnimeCandidate): List<DubInfo> {
         val initialPlayerUrl = loadInitialPlayerUrl(candidate.id)
         val initialPlayerDocument = loadPlayer(initialPlayerUrl, YUMMY_REFERER)
 
@@ -58,19 +104,16 @@ class YummyAnimeDubsSource(
     )
 
     private suspend fun loadSearchPage(query: String, page: Int): Document {
-        val html = client.get(YUMMY_SEARCH_URL) {
-            url {
-                parameters.append("do", "search")
-                parameters.append("subaction", "search")
-                parameters.append("search_start", page.toString())
-                parameters.append("full_search", "0")
-                parameters.append("story", query)
-            }
-            headers {
-                append("referer", YUMMY_REFERER)
-                append("user-agent", BROWSER_USER_AGENT)
-            }
-        }.bodyAsText()
+        val searchUrl = "$YUMMY_SEARCH_URL?do=search&subaction=search&search_start=$page&full_search=0&story=$query"
+        val html = client.executeWithProxyFallback(directClient) {
+            RequestLogger.logRequest(searchUrl, via = proxyInfo())
+            get(searchUrl) {
+                headers {
+                    append("referer", YUMMY_REFERER)
+                    append("user-agent", BROWSER_USER_AGENT)
+                }
+            }.bodyAsText()
+        }
 
         return Jsoup.parse(html, YUMMY_ORIGIN)
     }
@@ -105,18 +148,16 @@ class YummyAnimeDubsSource(
     }
 
     private suspend fun loadInitialPlayerUrl(animeId: String): String {
-        val body = client.get(YUMMY_AJAX_URL) {
-            url {
-                parameters.append("mod", "kodik-player")
-                parameters.append("url", "1")
-                parameters.append("action", "iframe")
-                parameters.append("id", animeId)
-            }
-            headers {
-                append("referer", YUMMY_AJAX_REFERER)
-                append("user-agent", BROWSER_USER_AGENT)
-            }
-        }.bodyAsText()
+        val ajaxUrl = "$YUMMY_AJAX_URL?mod=kodik-player&url=1&action=iframe&id=$animeId"
+        val body = client.executeWithProxyFallback(directClient) {
+            RequestLogger.logRequest(ajaxUrl, via = proxyInfo())
+            get(ajaxUrl) {
+                headers {
+                    append("referer", YUMMY_AJAX_REFERER)
+                    append("user-agent", BROWSER_USER_AGENT)
+                }
+            }.bodyAsText()
+        }
 
         val root = json.decodeFromString<JsonObject>(body)
         return root.string("data")?.let(::normalizeUrl)
@@ -124,12 +165,15 @@ class YummyAnimeDubsSource(
     }
 
     private suspend fun loadPlayer(url: String, referer: String): Document {
-        val html = client.get(url) {
-            headers {
-                append("referer", referer)
-                append("user-agent", BROWSER_USER_AGENT)
-            }
-        }.bodyAsText().replace("<script id=\"wappalyzerEnvDetection\"/>", "")
+        val html = client.executeWithProxyFallback(directClient) {
+            RequestLogger.logRequest(url, via = proxyInfo())
+            get(url) {
+                headers {
+                    append("referer", referer)
+                    append("user-agent", BROWSER_USER_AGENT)
+                }
+            }.bodyAsText()
+        }.replace("<script id=\"wappalyzerEnvDetection\"/>", "")
 
         return Jsoup.parse(html, url)
     }

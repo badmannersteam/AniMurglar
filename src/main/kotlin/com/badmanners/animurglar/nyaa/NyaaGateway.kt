@@ -1,9 +1,13 @@
 package com.badmanners.animurglar.nyaa
 
+import com.badmanners.animurglar.app.config.AppConfig
 import com.badmanners.animurglar.nyaa.TorrentEntry.EpisodeMediaFile
 import com.badmanners.animurglar.nyaa.TorrentEntry.ParsedTorrentMetadata
 import com.badmanners.animurglar.nyaa.TorrentEntry.ParsedTorrentMetadata.TorrentCategory
 import com.badmanners.animurglar.nyaa.TorrentEpisodeGroup.TorrentGroupProfile
+import com.badmanners.animurglar.utils.RequestLogger
+import com.badmanners.animurglar.utils.SearchCache
+import com.badmanners.animurglar.utils.executeWithProxyFallback
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -17,7 +21,7 @@ import kotlin.math.roundToLong
 import kotlin.text.RegexOption.IGNORE_CASE
 
 
-class NyaaGateway(private val client: HttpClient) {
+class NyaaGateway(private val client: HttpClient, private val directClient: HttpClient, private val config: AppConfig, private val searchCache: SearchCache) {
 
     companion object {
         private val squareBracketsContentRegex = Regex("""\[[^]]*]""")
@@ -118,6 +122,11 @@ class NyaaGateway(private val client: HttpClient) {
         return candidates
     }
 
+    private fun proxyInfo(): String {
+        val proxy = config.proxy
+        return if (proxy.enabled && proxy.host.isNotBlank()) "${proxy.type}://${proxy.host}:${proxy.port}" else "direct"
+    }
+
     private fun buildSearchUrl(query: String, page: Int): String {
         val builder = URLBuilder("https://nyaa.si/")
         builder.parameters.append("f", "0")
@@ -146,7 +155,17 @@ class NyaaGateway(private val client: HttpClient) {
     }
 
     private suspend fun loadDocument(url: String): Document {
-        val html = client.get(url).bodyAsText()
+        val html = searchCache.getOrPut(
+            key = "nyaa:$url",
+            ttlDays = config.cache.nyaaCacheTtlDays,
+            serializer = { it },
+            deserializer = { it },
+        ) {
+            client.executeWithProxyFallback(directClient) {
+                RequestLogger.logRequest(url, via = proxyInfo())
+                get(url).bodyAsText()
+            }
+        }
         return Jsoup.parse(html, url)
     }
 

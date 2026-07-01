@@ -1,5 +1,9 @@
 package com.badmanners.animurglar.dubs
 
+import com.badmanners.animurglar.app.config.AppConfig
+import com.badmanners.animurglar.utils.RequestLogger
+import com.badmanners.animurglar.utils.SearchCache
+import com.badmanners.animurglar.utils.executeWithProxyFallback
 import com.badmanners.animurglar.utils.int
 import com.badmanners.animurglar.utils.json
 import com.badmanners.animurglar.utils.long
@@ -11,6 +15,7 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.statement.bodyAsText
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -19,19 +24,56 @@ import org.apache.logging.log4j.LogManager
 
 class AnimeLibDubsSource(
     private val client: HttpClient,
-    private val kodikGateway: KodikGateway
+    private val directClient: HttpClient,
+    private val kodikGateway: KodikGateway,
+    private val config: AppConfig,
+    private val searchCache: SearchCache,
 ) : DubsSource {
 
     override val sourceId = "AnimeLib"
 
     private val logger = LogManager.getLogger(AnimeLibDubsSource::class.java)
 
-    override suspend fun searchAnime(query: String): List<DubAnimeCandidate> = search(query)
+    private fun proxyInfo(): String {
+        val proxy = config.proxy
+        return if (proxy.enabled && proxy.host.isNotBlank()) "${proxy.type}://${proxy.host}:${proxy.port}" else "direct"
+    }
+
+    override suspend fun searchAnime(query: String): List<DubAnimeCandidate> {
+        return searchCache.getOrPut(
+            key = "animelib:$query",
+            ttlDays = config.cache.searchCacheTtlDays,
+            serializer = { results ->
+                json.encodeToString(ListSerializer(DubAnimeCandidate.serializer()), results)
+            },
+            deserializer = { data ->
+                json.decodeFromString(ListSerializer(DubAnimeCandidate.serializer()), data)
+            },
+        ) {
+            search(query)
+        }
+    }
 
     override suspend fun loadDubs(candidate: DubAnimeCandidate): List<DubInfo> {
         require(candidate.sourceId == sourceId) {
             "Unsupported dubs candidate source: ${candidate.sourceId}"
         }
+
+        return searchCache.getOrPut(
+            key = "animelib:dubs:${candidate.id}",
+            ttlDays = config.cache.searchCacheTtlDays,
+            serializer = { results ->
+                json.encodeToString(ListSerializer(DubInfo.serializer()), results)
+            },
+            deserializer = { data ->
+                json.decodeFromString(ListSerializer(DubInfo.serializer()), data)
+            },
+        ) {
+            loadDubsInternal(candidate)
+        }
+    }
+
+    private suspend fun loadDubsInternal(candidate: DubAnimeCandidate): List<DubInfo> {
 
         val episodes = loadEpisodes(animeSlug = candidate.id)
         if (episodes.isEmpty()) {
@@ -98,12 +140,13 @@ class AnimeLibDubsSource(
     }
 
     private suspend fun search(query: String): List<DubAnimeCandidate> {
-        val body = client.get("$HAPI_BASE/anime?fields[]=releaseDate") {
-            url {
-                parameters.append("q", query)
-            }
-            hapiHeaders()
-        }.bodyAsText()
+        val searchUrl = "$HAPI_BASE/anime?fields[]=releaseDate&q=$query"
+        val body = client.executeWithProxyFallback(directClient) {
+            RequestLogger.logRequest(searchUrl, via = proxyInfo())
+            get(searchUrl) {
+                hapiHeaders()
+            }.bodyAsText()
+        }
 
         val root = json.decodeFromString<JsonObject>(body)
         val data = root["data"] as? JsonArray ?: return emptyList()
@@ -123,12 +166,13 @@ class AnimeLibDubsSource(
     }
 
     private suspend fun loadEpisodes(animeSlug: String): List<EpisodeIndex> {
-        val body = client.get("$HAPI_BASE/episodes") {
-            url {
-                parameters.append("anime_id", animeSlug)
-            }
-            hapiHeaders()
-        }.bodyAsText()
+        val episodesUrl = "$HAPI_BASE/episodes?anime_id=$animeSlug"
+        val body = client.executeWithProxyFallback(directClient) {
+            RequestLogger.logRequest(episodesUrl, via = proxyInfo())
+            get(episodesUrl) {
+                hapiHeaders()
+            }.bodyAsText()
+        }
 
         val root = json.decodeFromString<JsonObject>(body)
         val data = root["data"] as? JsonArray ?: return emptyList()
@@ -151,9 +195,13 @@ class AnimeLibDubsSource(
     }
 
     private suspend fun loadPlayers(episodeId: String): List<PlayerEntry> {
-        val body = client.get("$HAPI_BASE/episodes/$episodeId") {
-            hapiHeaders()
-        }.bodyAsText()
+        val playerUrl = "$HAPI_BASE/episodes/$episodeId"
+        val body = client.executeWithProxyFallback(directClient) {
+            RequestLogger.logRequest(playerUrl, via = proxyInfo())
+            get(playerUrl) {
+                hapiHeaders()
+            }.bodyAsText()
+        }
 
         val root = json.decodeFromString<JsonObject>(body)
         val data = root["data"]?.jsonObject ?: return emptyList()
@@ -191,6 +239,7 @@ class AnimeLibDubsSource(
         private const val ANIMELIB_REFERER = "https://animelib.org/"
         private const val RUSSIAN_LANGUAGE_TAG = "rus"
 
+        @Suppress("UastIncorrectHttpHeaderInspection")
         private fun HttpRequestBuilder.hapiHeaders() {
             headers {
                 append("origin", ANIMELIB_ORIGIN)

@@ -1,6 +1,9 @@
 package com.badmanners.animurglar.shikimori
 
+import kotlinx.serialization.Serializable
 
+
+@Serializable
 data class ShikimoriAnime(
     val id: String,
     val name: String,

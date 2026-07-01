@@ -1,5 +1,6 @@
 package com.badmanners.animurglar.downloader
 
+import com.badmanners.animurglar.app.config.AppConfig
 import com.badmanners.animurglar.downloader.DownloadProgressEvent.DownloadProgressGroup
 import com.badmanners.animurglar.subtitles.Anime365SubtitlesGateway
 import com.badmanners.animurglar.subtitles.DownloadedSubtitleEpisode
@@ -9,6 +10,7 @@ import com.badmanners.animurglar.subtitles.SubtitleEpisode
 import com.badmanners.animurglar.subtitles.SubtitleFont
 import com.badmanners.animurglar.subtitles.SubtitleTeamInfo
 import com.badmanners.animurglar.utils.BROWSER_USER_AGENT
+import com.badmanners.animurglar.utils.executeWithProxyFallback
 import com.badmanners.animurglar.utils.suspendRunCatching
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.onDownload
@@ -33,11 +35,18 @@ import kotlin.io.path.fileSize
 
 class SubtitleDownloadService(
     private val client: HttpClient,
+    private val directClient: HttpClient,
     private val subtitlesGateway: Anime365SubtitlesGateway,
     private val subtitleCaptionFilterService: SubtitleCaptionFilterService,
+    private val config: AppConfig,
 ) {
 
     private val logger = LogManager.getLogger(SubtitleDownloadService::class.java)
+
+    private fun proxyInfo(): String {
+        val proxy = config.proxy
+        return if (proxy.enabled && proxy.host.isNotBlank()) "${proxy.type}://${proxy.host}:${proxy.port}" else "direct"
+    }
 
     suspend fun download(
         request: DownloadRequest,
@@ -172,8 +181,10 @@ class SubtitleDownloadService(
         }
         destination.deleteIfExists()
 
+        logger.debug("SubtitleDownload downloading {} via {}", sourceUrl, proxyInfo())
         val speedTracker = DownloadSpeedTracker()
-        client.prepareGet(sourceUrl) {
+        val activeClient = if (config.proxy.enabled && config.proxy.host.isNotBlank()) client else directClient
+        activeClient.prepareGet(sourceUrl) {
             headers {
                 append("referer", referer)
                 append("user-agent", BROWSER_USER_AGENT)

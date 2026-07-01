@@ -52,7 +52,7 @@ fun main(args: Array<String>) = runBlocking {
             normalizedOriginalWavPath = workDir.resolve("original.analysis.wav"),
             normalizedDubWavPath = workDir.resolve("dub.analysis.wav"),
         ),
-        log = { message -> logger.info("[SYNC_CLI] $message") },
+        log = { message -> logger.info("[SYNC_CLI:analyze] $message") },
     )
 
     val planPath = workDir.resolve("sync-plan.json")
@@ -126,5 +126,5 @@ fun main(args: Array<String>) = runBlocking {
     )
 
     logger.info("[SYNC_CLI] applyCommand=${applyResult.command.joinToString(separator = " ")}")
-    logger.info("[SYNC_CLI] syncedOutput=${applyResult.syncedTrack.syncedPath}")
+    logger.info("[SYNC_CLI] syncedPath=${applyResult.syncedTrack.syncedPath}")
 }

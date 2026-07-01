@@ -5,6 +5,7 @@ import com.badmanners.animurglar.pipeline.DownloadBatch
 import com.badmanners.animurglar.pipeline.DownloadedEpisodeAssets
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import org.apache.logging.log4j.LogManager
 import kotlin.io.path.createDirectories
 
 class DownloadCoordinator(
@@ -13,6 +14,9 @@ class DownloadCoordinator(
     private val dubDownloadService: DubDownloadService,
     private val subtitleDownloadService: SubtitleDownloadService,
 ) {
+
+    private val logger = LogManager.getLogger(DownloadCoordinator::class.java)
+
     suspend fun download(request: DownloadRequest, onProgress: (DownloadProgressEvent) -> Unit): DownloadBatch {
         require(request.selectedEpisodes.isNotEmpty()) { "No episodes selected for download." }
         require(request.selectedDubs.isNotEmpty()) { "No dubs selected for download." }
@@ -43,13 +47,18 @@ class DownloadCoordinator(
                 )
             }
 
-            val rawByEpisode = torrentJob.await()
+            val rawByEpisode = try {
+                torrentJob.await()
+            } catch (e: Exception) {
+                logger.warn("Torrent download failed (qBittorrent unavailable?), continuing without raw video: {}", e.message)
+                emptyMap()
+            }
             val dubsByEpisode = dubsJob.await()
             val subtitlesByEpisode = subtitlesJob.await()
 
             request.selectedEpisodes.toSortedSet().map { episodeNumber ->
                 val rawVideoPath = rawByEpisode[episodeNumber]
-                    ?: error("Raw file was not prepared for episode $episodeNumber")
+                    ?: error("Raw file was not prepared for episode $episodeNumber. Is qBittorrent running on ${config.qBittorrent.baseUrl}?")
                 val subtitleTracks = subtitlesByEpisode[episodeNumber].orEmpty()
                 DownloadedEpisodeAssets(
                     episodeNumber = episodeNumber,

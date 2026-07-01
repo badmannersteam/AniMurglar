@@ -9,6 +9,7 @@ import com.badmanners.animurglar.ui.shikimori.ShikimoriStore.Intent
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStore.Label
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStore.Message
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStore.State
+import com.badmanners.animurglar.utils.SearchHistory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -23,6 +24,7 @@ interface ShikimoriStore : Store<Intent, State, Label> {
         data class AnimePicked(val animeId: String) : Intent
         data class SearchBarActiveChanged(val active: Boolean) : Intent
         data class RestoreSelection(val animeId: String?) : Intent
+        data object SelectionCleared : Intent
     }
 
     data class State(
@@ -32,6 +34,7 @@ interface ShikimoriStore : Store<Intent, State, Label> {
         val searchResults: List<ShikimoriAnime> = emptyList(),
         val selectedAnimeId: String? = null,
         val isSearchBarActive: Boolean = false,
+        val searchSuggestions: List<String> = emptyList(),
     )
 
     sealed interface Message {
@@ -42,6 +45,8 @@ interface ShikimoriStore : Store<Intent, State, Label> {
         data class AnimePicked(val anime: ShikimoriAnime) : Message
         data class SearchBarActiveChanged(val active: Boolean) : Message
         data class SelectionRestored(val animeId: String?) : Message
+        data class SuggestionsUpdated(val suggestions: List<String>) : Message
+        data object SelectionCleared : Message
     }
 
     sealed interface Label {
@@ -52,6 +57,7 @@ interface ShikimoriStore : Store<Intent, State, Label> {
 class ShikimoriStoreFactory(
     private val storeFactory: StoreFactory,
     private val shikimoriGateway: ShikimoriGateway,
+    private val searchHistory: SearchHistory,
 ) {
 
     fun create(): ShikimoriStore = object : ShikimoriStore, Store<Intent, State, Label>
@@ -66,6 +72,8 @@ class ShikimoriStoreFactory(
 
             onIntent<Intent.QueryChanged> { intent ->
                 dispatch(Message.QueryUpdated(value = intent.value))
+                val suggestions = searchHistory.suggestions(intent.value)
+                dispatch(Message.SuggestionsUpdated(suggestions = suggestions))
             }
 
             onIntent<Intent.SearchPressed> { intent ->
@@ -74,6 +82,8 @@ class ShikimoriStoreFactory(
                     dispatch(Message.SearchFailure(errorMessage = "Введите минимум $MIN_QUERY_LENGTH символа."))
                     return@onIntent
                 }
+
+                searchHistory.record(query)
 
                 activeSearch?.job?.cancel(CancellationException("Superseded by a new Shikimori search."))
                 dispatch(Message.SearchStarted)
@@ -114,10 +124,19 @@ class ShikimoriStoreFactory(
 
             onIntent<Intent.SearchBarActiveChanged> { intent ->
                 dispatch(Message.SearchBarActiveChanged(active = intent.active))
+                if (intent.active) {
+                    dispatch(Message.SuggestionsUpdated(suggestions = searchHistory.recent()))
+                } else {
+                    dispatch(Message.SuggestionsUpdated(suggestions = emptyList()))
+                }
             }
 
             onIntent<Intent.RestoreSelection> { intent ->
                 dispatch(Message.SelectionRestored(animeId = intent.animeId))
+            }
+
+            onIntent<Intent.SelectionCleared> {
+                dispatch(Message.SelectionCleared)
             }
         },
         reducer = { message ->
@@ -133,6 +152,7 @@ class ShikimoriStoreFactory(
                     searchResults = emptyList(),
                     selectedAnimeId = null,
                     isSearchBarActive = true,
+                    searchSuggestions = emptyList(),
                 )
 
                 is Message.SearchSuccess -> copy(
@@ -143,6 +163,7 @@ class ShikimoriStoreFactory(
                         message.results.any { it.id == selectedId }
                     },
                     isSearchBarActive = true,
+                    searchSuggestions = emptyList(),
                 )
 
                 is Message.SearchFailure -> copy(
@@ -156,6 +177,7 @@ class ShikimoriStoreFactory(
                     selectedAnimeId = message.anime.id,
                     isSearchBarActive = false,
                     error = null,
+                    searchSuggestions = emptyList(),
                 )
 
                 is Message.SearchBarActiveChanged -> copy(
@@ -171,8 +193,20 @@ class ShikimoriStoreFactory(
                         query = anime?.russian ?: query,
                         selectedAnimeId = anime?.id,
                         isSearchBarActive = false,
+                        searchSuggestions = emptyList(),
                     )
                 }
+
+                is Message.SuggestionsUpdated -> copy(
+                    searchSuggestions = message.suggestions,
+                )
+
+                Message.SelectionCleared -> copy(
+                    selectedAnimeId = null,
+                    searchResults = emptyList(),
+                    query = "",
+                    error = null,
+                )
             }
         },
     ) {}
