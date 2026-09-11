@@ -50,8 +50,8 @@ data class AppConfig(
 }
 
 data class NetworkTimeouts(
-    val connectMillis: Long = 30_000,
-    val socketMillis: Long = 30_000,
+    val connectMillis: Long = 10_000,
+    val socketMillis: Long = 10_000,
 )
 
 data class QBittorrentConfig(
@@ -61,7 +61,7 @@ data class QBittorrentConfig(
 )
 
 data class DownloaderConfig(
-    val maxParallelDubTasks: Int = 8,
-    val maxParallelHlsChunks: Int = 10,
+    val maxParallelDubTasks: Int = 6,
+    val maxParallelHlsChunks: Int = 5,
     val retries: Int = 2,
 )
