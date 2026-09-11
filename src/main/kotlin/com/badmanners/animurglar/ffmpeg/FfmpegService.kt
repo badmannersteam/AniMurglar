@@ -274,6 +274,7 @@ class FfmpegService {
 
         arguments += listOf(
             "-c", "copy", // Stream copy all mapped tracks without re-encoding.
+            "-max_interleave_delta", "0", // Wait for every stream so sparse subtitles do not push video ahead of dub audio.
             "-metadata", "title=Episode ${input.episodeNumber}", // Container title metadata.
             input.outputPath.toAbsolutePath().toString(), // Final merged file path.
         )
