@@ -290,15 +290,17 @@ class FfmpegService {
 
     private fun fontAttachmentArguments(fontPaths: List<Path>) = fontPaths.distinctBy { it.fileName }
         .flatMapIndexed { index, fontPath ->
+            val fileName = fontPath.fileName.toString()
             listOf(
                 "-attach", fontPath.toAbsolutePath().toString(),
+                "-metadata:s:t:$index", "filename=$fileName",
                 "-metadata:s:t:$index", "mimetype=${fontMimeType(fontPath)}",
             )
         }
 
     private fun fontMimeType(path: Path): String = when (path.fileName.toString().substringAfterLast('.').lowercase()) {
-        "otf" -> "font/otf"
-        "ttc", "ttf" -> "font/ttf"
+        "otf" -> "application/vnd.ms-opentype"
+        "ttc", "ttf" -> "application/x-truetype-font"
         else -> "application/octet-stream"
     }
 
