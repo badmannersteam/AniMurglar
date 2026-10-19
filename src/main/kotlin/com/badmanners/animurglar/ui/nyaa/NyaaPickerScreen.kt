@@ -4,8 +4,6 @@ import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -17,14 +15,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
@@ -46,6 +41,7 @@ import com.badmanners.animurglar.nyaa.TorrentCandidate
 import com.badmanners.animurglar.nyaa.TorrentEntry
 import com.badmanners.animurglar.nyaa.TorrentEntry.EpisodeMediaFile
 import com.badmanners.animurglar.nyaa.TorrentEpisodeGroup
+import com.badmanners.animurglar.ui.episodes.EpisodeSelectionSection
 import com.badmanners.animurglar.ui.nyaa.NyaaPickerStore.Intent
 import com.badmanners.animurglar.utils.openInBrowser
 import com.badmanners.animurglar.utils.toReadableSize
@@ -55,7 +51,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 
-@OptIn(ExperimentalCoroutinesApi::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalCoroutinesApi::class)
 @Composable
 fun NyaaPickerScreen(
     nyaaPickerStore: NyaaPickerStore,
@@ -535,67 +531,6 @@ private fun ExpandableFilesSection(
                 text = files.joinToString(separator = "\n"),
                 style = MaterialTheme.typography.bodySmall,
             )
-        }
-    }
-}
-
-@Composable
-private fun EpisodeSelectionSection(
-    episodes: List<Int>,
-    selectedEpisodes: Set<Int>,
-    onEpisodeSelectionChanged: (Int, Boolean) -> Unit,
-    onSelectAll: () -> Unit,
-    onClearAll: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    ElevatedCard(modifier = modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "Серии (${selectedEpisodes.size}/${episodes.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                )
-
-                if (episodes.isNotEmpty()) {
-                    TextButton(onClick = onSelectAll) {
-                        Text("Выбрать все")
-                    }
-
-                    TextButton(onClick = onClearAll) {
-                        Text("Снять все")
-                    }
-                }
-            }
-
-            if (episodes.isEmpty()) {
-                Text(
-                    text = "В выбранном торренте серии не найдены",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                return@ElevatedCard
-            }
-
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                episodes.sorted().forEach { episodeNumber ->
-                    val selected = episodeNumber in selectedEpisodes
-                    FilterChip(
-                        selected = selected,
-                        onClick = { onEpisodeSelectionChanged(episodeNumber, !selected) },
-                        label = { Text("Серия $episodeNumber") },
-                    )
-                }
-            }
         }
     }
 }

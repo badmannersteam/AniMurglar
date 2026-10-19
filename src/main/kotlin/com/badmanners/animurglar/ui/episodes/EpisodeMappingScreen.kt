@@ -92,8 +92,8 @@ private fun EpisodeMappingSection(
 
             Text(
                 text = when {
-                    mapping.offset == 0 -> "Серии в торренте и озвучке нумеруются одинаково."
-                    else -> "Серия ${mapping.torrentStartEpisode} из торрента соответствует серии ${mapping.dubStartEpisode} из озвучки."
+                    mapping.offset == 0 -> "Равки и озвучка нумеруются одинаково."
+                    else -> "Серия ${mapping.torrentStartEpisode} из равок соответствует серии ${mapping.dubStartEpisode} из озвучки."
                 },
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -108,7 +108,7 @@ private fun EpisodeMappingSection(
                     onValueChange = {},
                     readOnly = true,
                     singleLine = true,
-                    label = { Text("Торрент начинается с") },
+                    label = { Text("Равки начинаются с") },
                     modifier = Modifier.weight(1f),
                 )
 

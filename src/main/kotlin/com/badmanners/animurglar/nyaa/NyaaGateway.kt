@@ -1,5 +1,7 @@
 package com.badmanners.animurglar.nyaa
 
+import com.badmanners.animurglar.media.EpisodeFileParser.containsSpecialsMarker
+import com.badmanners.animurglar.media.EpisodeFileParser.extractEpisodeNumber
 import com.badmanners.animurglar.nyaa.TorrentEntry.EpisodeMediaFile
 import com.badmanners.animurglar.nyaa.TorrentEntry.ParsedTorrentMetadata
 import com.badmanners.animurglar.nyaa.TorrentEntry.ParsedTorrentMetadata.TorrentCategory
@@ -14,7 +16,6 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.time.Instant
 import kotlin.math.roundToLong
-import kotlin.text.RegexOption.IGNORE_CASE
 
 
 class NyaaGateway(private val client: HttpClient) {
@@ -40,15 +41,6 @@ class NyaaGateway(private val client: HttpClient) {
             Regex("""(?i)\b第\s*(\d{1,2})\s*季\b"""),
             Regex("""(?i)\bs(\d{1,2})(?=\b|[^0-9])"""),
         )
-        private val extractEpisodePatterns = listOf(
-            Regex("""(?i)\bs\d{1,2}\s*[-_. ]?e(\d{1,3})(?:v\d+)?\b"""),
-            Regex("""(?i)\b(?:EP|E|EPISODE)\s*[-_. ]?0*(\d{1,3})(?:v\d+)?\b"""),
-            Regex("""(?i)第\s*0*(\d{1,3})\s*[話话]\b"""),
-            Regex("""(?i)\[(\d{1,3})](?=[^0-9]|$)"""),
-            Regex("""(?i)-\s*0*(\d{1,3})(?:v\d+)?\b"""),
-            Regex("""(?i)(?:^|[\s\[(._-])0*(\d{1,3})(?:v\d+)?(?=$|[])\s._-]|\.m(?:kv|p4)\b)"""),
-        )
-        private val nonAlphaNumericRegex = Regex("""[^A-Z0-9]+""")
         private val torrentSizeRegex = Regex("""(?i)(\d+(?:\.\d+)?)\s*([KMGT]?i?B|B)""")
         private val technicalTagsRegex = Regex(
             """(?i)\b(?:HEVC|AVC|X265|X264|H\.265|H\.264|H265|H264|FLAC|AAC|AC3|DTS|PCM|OPUS|BDREMUX|BDMV|BLURAY|BDRIP|WEB-DL|WEBRIP|DVD)\b"""
@@ -57,20 +49,6 @@ class NyaaGateway(private val client: HttpClient) {
     }
 
     private val logger = LogManager.getLogger(NyaaGateway::class.java)
-
-    private val specialsBlacklist = listOf(
-        Regex("""\bNC(?:OP|ED)(?:\d+[A-Z]?|V\d+)?\b""", IGNORE_CASE),
-        Regex("""\b(?:OP|ED)(?:\d+[A-Z]?|V\d+)?\b""", IGNORE_CASE),
-        Regex("""\b(?:OPENING|ENDING)(?:\d+[A-Z]?|V\d+)?\b""", IGNORE_CASE),
-        Regex("""\bSPECIALS?\b""", IGNORE_CASE),
-        Regex("""\bEXTRAS?\b""", IGNORE_CASE),
-        Regex("""\b(?:CREDITLESS|NONCREDIT(?:ED|LESS)?)\b""", IGNORE_CASE),
-        Regex("""\bTRAILERS?\b""", IGNORE_CASE),
-        Regex("""\bPV\d*[A-Z]?\b""", IGNORE_CASE),
-        Regex("""\bCM\d*[A-Z]?\b""", IGNORE_CASE),
-        Regex("""\bMENU(?:\d+|(?:\s+NEW)?)\b""", IGNORE_CASE),
-        Regex("""\b(?:TOKUTEN|OUTTAKES?|SHORTS?|OMAKE|BONUS)\b""", IGNORE_CASE),
-    )
 
     private val sourceTags = listOf("BDREMUX", "BDMV", "BLURAY", "BDRIP", "WEB-DL", "WEBRIP", "DVD")
     private val videoCodecTags =
@@ -516,15 +494,6 @@ class NyaaGateway(private val client: HttpClient) {
 
     private fun String.extractSeason() = extractSeasonPatterns.firstNotNullOfOrNull { pattern ->
         pattern.find(this)?.groupValues?.getOrNull(1)?.toIntOrNull()
-    }
-
-    private fun String.extractEpisodeNumber() = extractEpisodePatterns.asSequence()
-        .mapNotNull { pattern -> pattern.find(this)?.groupValues?.getOrNull(1)?.toIntOrNull() }
-        .firstOrNull { number -> number in 1..999 }
-
-    private fun String.containsSpecialsMarker(): Boolean {
-        val normalized = uppercase().replace(nonAlphaNumericRegex, " ")
-        return specialsBlacklist.any { regex -> regex.containsMatchIn(normalized) }
     }
 
     private fun String.parseSizeToBytes(): Long {

@@ -40,6 +40,8 @@ import com.badmanners.animurglar.ui.nyaa.NyaaPickerScreen
 import com.badmanners.animurglar.ui.nyaa.NyaaPickerStore
 import com.badmanners.animurglar.ui.processing.ProcessingScreen
 import com.badmanners.animurglar.ui.processing.ProcessingStore
+import com.badmanners.animurglar.ui.raws.LocalRawFilesScreen
+import com.badmanners.animurglar.ui.raws.RawSourceSelection
 import com.badmanners.animurglar.ui.shikimori.ShikimoriScreen
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStore
 import com.badmanners.animurglar.ui.subtitles.SubtitlesPickerScreen
@@ -67,14 +69,13 @@ fun RootScreen(
     val downloaderState by downloaderStore.stateFlow.collectAsState()
     val processingState by processingStore.stateFlow.collectAsState()
     val isExecutionRunning = downloaderState.isRunning || processingState.isRunning
+    val selectedRawEpisodes = rootState.selectedRawEpisodes(nyaaState)
     val isStartVisible = !shikimoriState.isLoading
-        && !nyaaState.isLoading
         && !dubsState.isLoading
         && !subtitlesState.isLoading
         && !isExecutionRunning
         && rootState.selectedAnime != null
-        && nyaaState.selectedCandidateKey != null
-        && nyaaState.selectedEpisodes.isNotEmpty()
+        && rootState.isRawSelectionReady(nyaaState)
         && dubsState.selectedDubKeys.isNotEmpty()
 
     var selectedTab by remember { mutableStateOf(0) }
@@ -120,14 +121,28 @@ fun RootScreen(
                         ) {
                             if (selectedTab == 0) {
                                 Column(modifier = Modifier.fillMaxHeight().weight(1f)) {
-                                    NyaaPickerScreen(
-                                        nyaaPickerStore = nyaaPickerStore,
-                                        modifier = Modifier.weight(1f, fill = false),
+                                    RawSourceSelection(
+                                        kind = rootState.rawSourceKind,
+                                        onKindSelected = { rootStore.accept(RootStore.Intent.RawSourceKindChanged(it)) },
+                                        enabled = !isExecutionRunning,
                                     )
+
+                                    when (rootState.rawSourceKind) {
+                                        RawSourceKind.NYAA -> NyaaPickerScreen(
+                                            nyaaPickerStore = nyaaPickerStore,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                        RawSourceKind.LOCAL -> LocalRawFilesScreen(
+                                            state = rootState,
+                                            onIntent = rootStore::accept,
+                                            enabled = !isExecutionRunning,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                    }
 
                                     EpisodeMappingScreen(
                                         episodeMappingStore = episodeMappingStore,
-                                        selectedTorrentEpisodes = nyaaState.selectedEpisodes,
+                                        selectedTorrentEpisodes = selectedRawEpisodes,
                                         modifier = Modifier.padding(top = 12.dp),
                                     )
                                 }

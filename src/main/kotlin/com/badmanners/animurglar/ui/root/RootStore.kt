@@ -7,8 +7,10 @@ import com.arkivanov.mvikotlin.extensions.coroutines.coroutineExecutorFactory
 import com.arkivanov.mvikotlin.extensions.coroutines.labels
 import com.badmanners.animurglar.app.config.AppConfig
 import com.badmanners.animurglar.downloader.DownloadRequest
+import com.badmanners.animurglar.downloader.RawVideoSource
 import com.badmanners.animurglar.downloader.suggestEpisodeMapping
 import com.badmanners.animurglar.dubs.DubInfo
+import com.badmanners.animurglar.local.LocalRawFilesService
 import com.badmanners.animurglar.nyaa.TorrentCandidate
 import com.badmanners.animurglar.pipeline.DownloadBatch
 import com.badmanners.animurglar.shikimori.ShikimoriAnime
@@ -26,11 +28,18 @@ import com.badmanners.animurglar.ui.root.RootStore.State
 import com.badmanners.animurglar.ui.shikimori.ShikimoriStore
 import com.badmanners.animurglar.ui.subtitles.SubtitlesPickerStore
 import com.badmanners.animurglar.utils.deleteRecursivelyIfExists
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.awt.Desktop
+import java.nio.file.Path
 import kotlin.io.path.createDirectories
 
+
+enum class RawSourceKind {
+    NYAA, LOCAL
+}
 
 interface RootStore : Store<Intent, State, Label> {
 
@@ -45,17 +54,35 @@ interface RootStore : Store<Intent, State, Label> {
         data object PurgeTempFolderPressed : Intent
         data object PendingSelectionConfirmed : Intent
         data object PendingSelectionDismissed : Intent
+        data class RawSourceKindChanged(val kind: RawSourceKind) : Intent
+        data class LocalFolderChanged(val folder: String) : Intent
+        data object ScanLocalFolder : Intent
+        data class LocalEpisodeSelectionChanged(val episodeNumber: Int, val selected: Boolean) : Intent
+        data class AllLocalEpisodesSelectionChanged(val selected: Boolean) : Intent
     }
 
     data class State(
         val selectedAnime: ShikimoriAnime? = null,
         val pendingAnimeSelection: ShikimoriAnime? = null,
+        val rawSourceKind: RawSourceKind = RawSourceKind.NYAA,
+        val localFolder: String = "",
+        val localFiles: Map<Int, Path> = emptyMap(),
+        val selectedLocalEpisodes: Set<Int> = emptySet(),
+        val isScanningLocalFolder: Boolean = false,
+        val localFolderError: String? = null,
     )
 
     sealed interface Message {
         data class AnimeSelectionApplied(val anime: ShikimoriAnime) : Message
         data class AnimeSelectionPending(val anime: ShikimoriAnime) : Message
         data object PendingSelectionCleared : Message
+        data class RawSourceKindChanged(val kind: RawSourceKind) : Message
+        data class LocalFolderChanged(val folder: String) : Message
+        data object LocalScanStarted : Message
+        data class LocalScanSucceeded(val files: Map<Int, Path>) : Message
+        data class LocalScanFailed(val error: String) : Message
+        data class LocalEpisodeSelectionChanged(val episodeNumber: Int, val selected: Boolean) : Message
+        data class AllLocalEpisodesSelectionChanged(val selected: Boolean) : Message
     }
 
     sealed interface Label
@@ -71,6 +98,7 @@ class RootStoreFactory(
     private val episodeMappingStore: EpisodeMappingStore,
     private val downloaderStore: DownloaderStore,
     private val processingStore: ProcessingStore,
+    private val localRawFilesService: LocalRawFilesService,
 ) {
     @OptIn(ExperimentalCoroutinesApi::class)
     fun create(): RootStore = object : RootStore, Store<Intent, State, Label>
@@ -101,6 +129,10 @@ class RootStoreFactory(
             }
         },
         executorFactory = coroutineExecutorFactory {
+            var activeLocalScan: Job? = null
+
+            fun isExecutionRunning() = downloaderStore.state.isRunning || processingStore.state.isRunning
+
             onAction<Action.DownloadCompleted> { action ->
                 processingStore.accept(ProcessingStore.Intent.Start(batch = action.batch))
             }
@@ -109,12 +141,14 @@ class RootStoreFactory(
                 if (downloaderStore.state.isRunning || processingStore.state.isRunning) {
                     dispatch(Message.AnimeSelectionPending(anime = action.anime))
                 } else {
+                    activeLocalScan?.cancel()
                     applyAnimeSelection(anime = action.anime, cancelRunningExecution = false)
                 }
             }
 
             onIntent<Intent.PendingSelectionConfirmed> {
                 val pendingAnime = state().pendingAnimeSelection ?: return@onIntent
+                activeLocalScan?.cancel()
                 applyAnimeSelection(anime = pendingAnime, cancelRunningExecution = true)
             }
 
@@ -122,6 +156,57 @@ class RootStoreFactory(
                 val selectedAnimeId = state().selectedAnime?.id
                 shikimoriStore.accept(ShikimoriStore.Intent.RestoreSelection(animeId = selectedAnimeId))
                 dispatch(Message.PendingSelectionCleared)
+            }
+
+            onIntent<Intent.RawSourceKindChanged> { intent ->
+                if (isExecutionRunning() || intent.kind == state().rawSourceKind) return@onIntent
+                activeLocalScan?.cancel()
+                dispatch(Message.RawSourceKindChanged(intent.kind))
+                episodeMappingStore.accept(EpisodeMappingStore.Intent.Reset)
+                when (intent.kind) {
+                    RawSourceKind.LOCAL -> nyaaPickerStore.accept(NyaaPickerStore.Intent.CancelSearch)
+                    RawSourceKind.NYAA -> state().selectedAnime?.let { anime ->
+                        if (nyaaPickerStore.state.candidates.isEmpty()) {
+                            searchNyaa(anime)
+                        }
+                    }
+                }
+            }
+
+            onIntent<Intent.LocalFolderChanged> { intent ->
+                if (isExecutionRunning()) return@onIntent
+                activeLocalScan?.cancel()
+                dispatch(Message.LocalFolderChanged(intent.folder))
+                episodeMappingStore.accept(EpisodeMappingStore.Intent.Reset)
+            }
+
+            onIntent<Intent.ScanLocalFolder> {
+                if (isExecutionRunning() || state().rawSourceKind != RawSourceKind.LOCAL) return@onIntent
+                val anime = state().selectedAnime ?: return@onIntent
+                val folder = state().localFolder
+                activeLocalScan?.cancel()
+                dispatch(Message.LocalScanStarted)
+                activeLocalScan = launch {
+                    try {
+                        require(folder.isNotBlank()) { "Укажите папку с готовыми видеофайлами." }
+                        val files = localRawFilesService.scan(Path.of(folder), isMovie = anime.isMovie)
+                        dispatch(Message.LocalScanSucceeded(files))
+                    } catch (exception: CancellationException) {
+                        throw exception
+                    } catch (exception: Exception) {
+                        dispatch(Message.LocalScanFailed(exception.message ?: "Не удалось прочитать папку."))
+                    }
+                }
+            }
+
+            onIntent<Intent.LocalEpisodeSelectionChanged> { intent ->
+                if (isExecutionRunning() || intent.episodeNumber !in state().localFiles) return@onIntent
+                dispatch(Message.LocalEpisodeSelectionChanged(intent.episodeNumber, intent.selected))
+            }
+
+            onIntent<Intent.AllLocalEpisodesSelectionChanged> { intent ->
+                if (isExecutionRunning()) return@onIntent
+                dispatch(Message.AllLocalEpisodesSelectionChanged(intent.selected))
             }
 
             onIntent<Intent.StartPressed> {
@@ -168,6 +253,11 @@ class RootStoreFactory(
                 is Message.AnimeSelectionApplied -> copy(
                     selectedAnime = message.anime,
                     pendingAnimeSelection = null,
+                    localFolder = "",
+                    localFiles = emptyMap(),
+                    selectedLocalEpisodes = emptySet(),
+                    isScanningLocalFolder = false,
+                    localFolderError = null,
                 )
 
                 is Message.AnimeSelectionPending -> copy(
@@ -176,6 +266,51 @@ class RootStoreFactory(
 
                 Message.PendingSelectionCleared -> copy(
                     pendingAnimeSelection = null,
+                )
+
+                is Message.RawSourceKindChanged -> copy(
+                    rawSourceKind = message.kind,
+                    isScanningLocalFolder = false,
+                )
+
+                is Message.LocalFolderChanged -> copy(
+                    localFolder = message.folder,
+                    localFiles = emptyMap(),
+                    selectedLocalEpisodes = emptySet(),
+                    isScanningLocalFolder = false,
+                    localFolderError = null,
+                )
+
+                Message.LocalScanStarted -> copy(
+                    localFiles = emptyMap(),
+                    selectedLocalEpisodes = emptySet(),
+                    isScanningLocalFolder = true,
+                    localFolderError = null,
+                )
+
+                is Message.LocalScanSucceeded -> copy(
+                    localFiles = message.files,
+                    selectedLocalEpisodes = message.files.keys.toSet(),
+                    isScanningLocalFolder = false,
+                )
+
+                is Message.LocalScanFailed -> copy(
+                    isScanningLocalFolder = false,
+                    localFolderError = message.error,
+                )
+
+                is Message.LocalEpisodeSelectionChanged -> copy(
+                    selectedLocalEpisodes = when {
+                        message.selected -> selectedLocalEpisodes + message.episodeNumber
+                        else -> selectedLocalEpisodes - message.episodeNumber
+                    },
+                )
+
+                is Message.AllLocalEpisodesSelectionChanged -> copy(
+                    selectedLocalEpisodes = when {
+                        message.selected -> localFiles.keys.toSet()
+                        else -> emptySet()
+                    },
                 )
             }
         },
@@ -206,16 +341,20 @@ class RootStoreFactory(
         }
 
         dispatch(Message.AnimeSelectionApplied(anime = anime))
-        nyaaPickerStore.accept(
-            NyaaPickerStore.Intent.Search(
-                queries = anime.nyaaQueries,
-                episodesAired = anime.episodesAired ?: 0,
-                isMovie = anime.isMovie,
-            )
-        )
+        if (state().rawSourceKind == RawSourceKind.NYAA) {
+            searchNyaa(anime)
+        }
         dubsPickerStore.accept(DubsPickerStore.Intent.Search(queries = anime.dubsQueries))
         subtitlesPickerStore.accept(SubtitlesPickerStore.Intent.Search(shikimoriUrl = anime.url))
     }
+
+    private fun searchNyaa(anime: ShikimoriAnime) = nyaaPickerStore.accept(
+        NyaaPickerStore.Intent.Search(
+            queries = anime.nyaaQueries,
+            episodesAired = anime.episodesAired ?: 0,
+            isMovie = anime.isMovie,
+        )
+    )
 
     private fun prepareDownloadRequest(
         rootState: State,
@@ -226,8 +365,13 @@ class RootStoreFactory(
     ): DownloadRequest {
         val selectedAnime = checkNotNull(rootState.selectedAnime) { "Anime is not selected." }
 
-        val selectedCandidate = checkNotNull(nyaaState.selectedCandidate()) { "Torrent candidate is not selected." }
-        val selectedEpisodes = nyaaState.selectedEpisodes
+        val rawSource = when (rootState.rawSourceKind) {
+            RawSourceKind.NYAA -> RawVideoSource.Nyaa(
+                checkNotNull(nyaaState.selectedCandidate()) { "Torrent candidate is not selected." }
+            )
+            RawSourceKind.LOCAL -> RawVideoSource.Local(rootState.localFiles)
+        }
+        val selectedEpisodes = rootState.selectedRawEpisodes(nyaaState)
         require(selectedEpisodes.isNotEmpty()) { "No episodes selected." }
 
         val selectedDubs = dubsState.selectedDubs()
@@ -236,7 +380,7 @@ class RootStoreFactory(
 
         return DownloadRequest(
             title = selectedAnime.russian,
-            torrent = selectedCandidate,
+            rawSource = rawSource,
             selectedEpisodes = selectedEpisodes,
             selectedDubs = selectedDubs,
             episodeMapping = episodeMapping,
@@ -265,13 +409,24 @@ class RootStoreFactory(
         downloaderState: DownloaderStore.State,
         processingState: ProcessingStore.State,
     ): Boolean {
-        if (rootState.selectedAnime == null || nyaaState.isLoading || dubsState.isLoading || subtitlesState.isLoading || downloaderState.isRunning || processingState.isRunning) {
+        if (rootState.selectedAnime == null || dubsState.isLoading || subtitlesState.isLoading || downloaderState.isRunning || processingState.isRunning) {
             return false
         }
 
-        val hasCandidate = nyaaState.selectedCandidate() != null
-        val hasEpisodes = nyaaState.selectedEpisodes.isNotEmpty()
         val hasDubs = dubsState.selectedDubs().isNotEmpty()
-        return hasCandidate && hasEpisodes && hasDubs
+        return rootState.isRawSelectionReady(nyaaState) && hasDubs
     }
+}
+
+fun State.selectedRawEpisodes(nyaaState: NyaaPickerStore.State) = when (rawSourceKind) {
+    RawSourceKind.NYAA -> nyaaState.selectedEpisodes
+    RawSourceKind.LOCAL -> selectedLocalEpisodes
+}
+
+fun State.isRawSelectionReady(nyaaState: NyaaPickerStore.State) = when (rawSourceKind) {
+    RawSourceKind.NYAA -> !nyaaState.isLoading
+        && nyaaState.candidates.any { it.key == nyaaState.selectedCandidateKey }
+        && nyaaState.selectedEpisodes.isNotEmpty()
+
+    RawSourceKind.LOCAL -> !isScanningLocalFolder && selectedLocalEpisodes.isNotEmpty()
 }

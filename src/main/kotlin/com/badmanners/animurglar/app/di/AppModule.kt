@@ -17,6 +17,7 @@ import com.badmanners.animurglar.dubs.YummyAnimeDubsSource
 import com.badmanners.animurglar.ffmpeg.FfmpegService
 import com.badmanners.animurglar.ffmpeg.SyncAnalyzeService
 import com.badmanners.animurglar.ffmpeg.SyncChartService
+import com.badmanners.animurglar.local.LocalRawFilesService
 import com.badmanners.animurglar.nyaa.NyaaGateway
 import com.badmanners.animurglar.shikimori.ShikimoriGateway
 import com.badmanners.animurglar.subtitles.Anime365SubtitlesGateway
@@ -46,6 +47,7 @@ fun appModule(config: AppConfig) = module {
     single { httpClient(config) }
 
     single { NyaaGateway(get()) }
+    single { LocalRawFilesService() }
 
     single { ShikimoriGateway(get()) }
 
@@ -69,7 +71,7 @@ fun appModule(config: AppConfig) = module {
     single<DownloaderStore> { DownloaderStoreFactory(get(), get()).create() }
     single<ProcessingStore> { ProcessingStoreFactory(get(), get(), get(), get(), get()).create() }
 
-    single<RootStore> { RootStoreFactory(get(), get(), get(), get(), get(), get(), get(), get(), get()).create() }
+    single<RootStore> { RootStoreFactory(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()).create() }
 
     single { FfmpegService() }
     single { SyncAnalyzeService(get()) }

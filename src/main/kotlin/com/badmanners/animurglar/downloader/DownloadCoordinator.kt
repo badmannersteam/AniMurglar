@@ -3,9 +3,13 @@ package com.badmanners.animurglar.downloader
 import com.badmanners.animurglar.app.config.AppConfig
 import com.badmanners.animurglar.pipeline.DownloadBatch
 import com.badmanners.animurglar.pipeline.DownloadedEpisodeAssets
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlin.io.path.createDirectories
+import kotlin.io.path.isReadable
+import kotlin.io.path.isRegularFile
 
 class DownloadCoordinator(
     private val config: AppConfig,
@@ -22,11 +26,23 @@ class DownloadCoordinator(
 
         val torrentDeferred = coroutineScope {
             val torrentJob = async {
-                torrentDownloadService.download(
-                    request = request,
-                    paths = paths,
-                    onProgress = onProgress,
-                )
+                when (val source = request.rawSource) {
+                    is RawVideoSource.Nyaa -> torrentDownloadService.download(
+                        request = request,
+                        paths = paths,
+                        onProgress = onProgress,
+                    )
+
+                    is RawVideoSource.Local -> withContext(Dispatchers.IO) {
+                        request.selectedEpisodes.associateWith { episodeNumber ->
+                            val path = source.files.getValue(episodeNumber)
+                            require(path.isRegularFile() && path.isReadable()) {
+                                "Локальный файл серии $episodeNumber недоступен: $path"
+                            }
+                            path
+                        }
+                    }
+                }
             }
             val dubsJob = async {
                 dubDownloadService.download(
