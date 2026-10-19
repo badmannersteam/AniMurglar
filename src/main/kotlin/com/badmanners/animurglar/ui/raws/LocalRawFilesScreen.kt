@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.badmanners.animurglar.ui.episodes.EpisodeSelectionSection
+import com.badmanners.animurglar.ui.episodes.SeasonSelection
 import com.badmanners.animurglar.ui.root.RawSourceKind
 import com.badmanners.animurglar.ui.root.RootStore
 import com.badmanners.animurglar.ui.root.RootStore.Intent
@@ -135,6 +136,15 @@ fun LocalRawFilesScreen(
                 onClearAll = { onIntent(Intent.AllLocalEpisodesSelectionChanged(false)) },
                 enabled = enabled,
                 modifier = Modifier.padding(top = 12.dp).weight(1f, fill = false),
+                headerContent = {
+                    SeasonSelection(
+                        seasons = state.localSeasons.keys.sorted(),
+                        selectedSeason = state.selectedLocalSeason,
+                        onSeasonSelected = { onIntent(Intent.LocalSeasonSelected(it)) },
+                        enabled = enabled,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                },
             )
         }
     }

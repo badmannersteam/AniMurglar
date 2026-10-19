@@ -3,6 +3,7 @@ package com.badmanners.animurglar.ui.nyaa
 import com.arkivanov.mvikotlin.core.store.Store
 import com.arkivanov.mvikotlin.core.store.StoreFactory
 import com.arkivanov.mvikotlin.extensions.coroutines.coroutineExecutorFactory
+import com.badmanners.animurglar.media.RawSeason
 import com.badmanners.animurglar.nyaa.NyaaGateway
 import com.badmanners.animurglar.nyaa.NyaaSearchProgress
 import com.badmanners.animurglar.nyaa.TorrentCandidate
@@ -23,8 +24,10 @@ interface NyaaPickerStore : Store<Intent, State, Label> {
             val episodesAired: Int,
             val isMovie: Boolean,
         ) : Intent
+
         data object CancelSearch : Intent
         data class CandidateSelected(val candidateKey: String) : Intent
+        data class SeasonSelected(val season: RawSeason) : Intent
         data class EpisodeSelectionChanged(val episodeNumber: Int, val selected: Boolean) : Intent
         data object PickerDialogOpened : Intent
         data object PickerDialogDismissed : Intent
@@ -38,6 +41,7 @@ interface NyaaPickerStore : Store<Intent, State, Label> {
         val error: String? = null,
         val candidates: List<TorrentCandidate> = emptyList(),
         val selectedCandidateKey: String? = null,
+        val selectedSeason: RawSeason? = null,
         val selectedEpisodes: Set<Int> = emptySet(),
         val isPickerDialogOpen: Boolean = false,
     )
@@ -50,6 +54,7 @@ interface NyaaPickerStore : Store<Intent, State, Label> {
         data class SearchSuccess(val candidates: List<TorrentCandidate>) : Message
         data class SearchFailure(val errorMessage: String) : Message
         data class CandidateSelected(val candidateKey: String) : Message
+        data class SeasonSelected(val season: RawSeason) : Message
         data class EpisodeSelectionChanged(val episodeNumber: Int, val selected: Boolean) : Message
         data object PickerDialogOpened : Message
         data object PickerDialogDismissed : Message
@@ -134,6 +139,10 @@ class NyaaPickerStoreFactory(
                 dispatch(NyaaPickerStore.Message.CandidateSelected(candidateKey = intent.candidateKey))
             }
 
+            onIntent<Intent.SeasonSelected> { intent ->
+                dispatch(NyaaPickerStore.Message.SeasonSelected(season = intent.season))
+            }
+
             onIntent<Intent.EpisodeSelectionChanged> { intent ->
                 dispatch(
                     NyaaPickerStore.Message.EpisodeSelectionChanged(
@@ -166,6 +175,7 @@ class NyaaPickerStoreFactory(
                     error = null,
                     candidates = emptyList(),
                     selectedCandidateKey = null,
+                    selectedSeason = null,
                     selectedEpisodes = emptySet(),
                     isPickerDialogOpen = false,
                 )
@@ -184,50 +194,54 @@ class NyaaPickerStoreFactory(
                     )
                 }
 
-                is NyaaPickerStore.Message.SearchSuccess -> {
-                    val firstCandidate = message.candidates.firstOrNull()
-                    copy(
-                        isLoading = false,
-                        progressCurrent = progressTotal,
-                        error = null,
-                        candidates = message.candidates,
-                        selectedCandidateKey = firstCandidate?.key,
-                        selectedEpisodes = firstCandidate?.episodes?.toSet().orEmpty(),
-                        isPickerDialogOpen = false,
-                    )
-                }
+                is NyaaPickerStore.Message.SearchSuccess -> copy(
+                    isLoading = false,
+                    progressCurrent = progressTotal,
+                    error = null,
+                    candidates = message.candidates,
+                    isPickerDialogOpen = false,
+                ).withCandidate(message.candidates.firstOrNull())
 
                 is NyaaPickerStore.Message.SearchFailure -> copy(
                     isLoading = false,
                     error = message.errorMessage,
                     candidates = emptyList(),
                     selectedCandidateKey = null,
+                    selectedSeason = null,
                     selectedEpisodes = emptySet(),
                     isPickerDialogOpen = false,
                 )
 
-                is NyaaPickerStore.Message.CandidateSelected -> {
-                    val selectedCandidate = candidates.firstOrNull { it.key == message.candidateKey }
-                    copy(
-                        selectedCandidateKey = selectedCandidate?.key,
-                        selectedEpisodes = selectedCandidate?.episodes?.toSet().orEmpty(),
-                    )
+                is NyaaPickerStore.Message.CandidateSelected -> withCandidate(
+                    candidates.firstOrNull { it.key == message.candidateKey }
+                )
+
+                is NyaaPickerStore.Message.SeasonSelected -> {
+                    val candidate = candidates.firstOrNull { it.key == selectedCandidateKey }
+                    when {
+                        candidate !is TorrentCandidate.SeasonPack
+                                || message.season !in candidate.seasons
+                                || message.season == selectedSeason -> this
+
+                        else -> copy(
+                            selectedSeason = message.season,
+                            selectedEpisodes = candidate.selectSeason(message.season).episodes.toSet(),
+                        )
+                    }
                 }
 
                 is NyaaPickerStore.Message.EpisodeSelectionChanged -> {
-                    val selectedCandidate = candidates.firstOrNull { it.key == selectedCandidateKey }
-                    val availableEpisodes = selectedCandidate?.episodes?.toSet().orEmpty()
+                    val availableEpisodes = selectedCandidate()?.episodes ?: emptyList()
                     if (message.episodeNumber !in availableEpisodes) {
                         return@create this
                     }
 
-                    val nextSelection = selectedEpisodes.toMutableSet()
-                    if (message.selected) {
-                        nextSelection += message.episodeNumber
-                    } else {
-                        nextSelection -= message.episodeNumber
-                    }
-                    copy(selectedEpisodes = nextSelection)
+                    copy(
+                        selectedEpisodes = when {
+                            message.selected -> selectedEpisodes + message.episodeNumber
+                            else -> selectedEpisodes - message.episodeNumber
+                        },
+                    )
                 }
 
                 NyaaPickerStore.Message.PickerDialogOpened -> {
@@ -241,8 +255,32 @@ class NyaaPickerStoreFactory(
         },
     ) {}
 
+    private fun State.withCandidate(candidate: TorrentCandidate?): State {
+        val nextState = copy(
+            selectedCandidateKey = candidate?.key,
+            selectedSeason = (candidate as? TorrentCandidate.SeasonPack)?.seasons?.firstOrNull(),
+            selectedEpisodes = emptySet(),
+        )
+        return nextState.copy(selectedEpisodes = nextState.selectedCandidate()?.episodes?.toSet() ?: emptySet())
+    }
+
     private data class ActiveSearch(
         val id: Long,
         val job: Job,
     )
+}
+
+fun State.selectedCandidate(): TorrentCandidate? {
+    val candidate = candidates.firstOrNull { it.key == selectedCandidateKey } ?: return null
+    return when (candidate) {
+        is TorrentCandidate.SeasonPack -> {
+            val season = selectedSeason ?: candidate.seasons.singleOrNull() ?: return null
+            when (season) {
+                in candidate.seasons -> candidate.selectSeason(season)
+                else -> null
+            }
+        }
+
+        is TorrentCandidate.EpisodeGroup -> candidate
+    }
 }

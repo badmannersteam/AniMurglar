@@ -1,7 +1,11 @@
 package com.badmanners.animurglar.nyaa
 
+import com.badmanners.animurglar.media.EpisodeFileParser
 import com.badmanners.animurglar.media.EpisodeFileParser.containsSpecialsMarker
 import com.badmanners.animurglar.media.EpisodeFileParser.extractEpisodeNumber
+import com.badmanners.animurglar.media.EpisodeFileParser.extractSeason
+import com.badmanners.animurglar.media.EpisodeFileParser.isMediaFile
+import com.badmanners.animurglar.media.RawSeason
 import com.badmanners.animurglar.nyaa.TorrentEntry.EpisodeMediaFile
 import com.badmanners.animurglar.nyaa.TorrentEntry.ParsedTorrentMetadata
 import com.badmanners.animurglar.nyaa.TorrentEntry.ParsedTorrentMetadata.TorrentCategory
@@ -33,14 +37,6 @@ class NyaaGateway(private val client: HttpClient) {
             """(?i)(?:[\s._-]+(?:EP|E|EPISODE)?\s*0*\d{1,3}(?:V\d+)?)+\s*$"""
         )
         private val extractResolutionRegex = Regex("""(?i)\b(480p|576p|720p|900p|1080p|1440p|2160p|4k)\b""")
-        private val extractSeasonPatterns = listOf(
-            Regex("""(?i)\bs(\d{1,2})\s*[-_. ]?e\d{1,3}\b"""),
-            Regex("""(?i)\b(\d{1,2})x\d{1,3}\b"""),
-            Regex("""(?i)\b(\d{1,2})(?:st|nd|rd|th)?\s+season\b"""),
-            Regex("""(?i)\bseason\s*[-_. ]?(\d{1,2})\b"""),
-            Regex("""(?i)\b第\s*(\d{1,2})\s*季\b"""),
-            Regex("""(?i)\bs(\d{1,2})(?=\b|[^0-9])"""),
-        )
         private val torrentSizeRegex = Regex("""(?i)(\d+(?:\.\d+)?)\s*([KMGT]?i?B|B)""")
         private val technicalTagsRegex = Regex(
             """(?i)\b(?:HEVC|AVC|X265|X264|H\.265|H\.264|H265|H264|FLAC|AAC|AC3|DTS|PCM|OPUS|BDREMUX|BDMV|BLURAY|BDRIP|WEB-DL|WEBRIP|DVD)\b"""
@@ -72,7 +68,7 @@ class NyaaGateway(private val client: HttpClient) {
 
         val enrichedEntries = buildList {
             deduplicatedListEntries.forEachIndexed { index, entry ->
-                enrichWithDetails(entry, isMovie = isMovie)?.let(::add)
+                addAll(enrichWithDetails(entry, isMovie = isMovie))
                 onProgress(NyaaSearchProgress(currentRequest = index + 1, totalRequests = totalRequests))
             }
         }
@@ -159,25 +155,32 @@ class NyaaGateway(private val client: HttpClient) {
         )
     }
 
-    private suspend fun enrichWithDetails(entry: TorrentEntry, isMovie: Boolean): TorrentEntry? {
+    private suspend fun enrichWithDetails(entry: TorrentEntry, isMovie: Boolean): List<TorrentEntry> {
         val detailsDocument = loadDocument(entry.detailsLink)
-        val episodeMediaFiles = parseEpisodeMediaFiles(detailsDocument, isMovie = isMovie)
-        if (episodeMediaFiles.isEmpty())
-            return null
-
-        val filesByEpisode = episodeMediaFiles
-            .groupBy(EpisodeMediaFile::episodeNumber)
-            .mapValues { (_, files) -> files.maxByOrNull { it.sizeBytes } ?: files.first() }
-
-        val resolvedCategory = entry.metadata.category.resolveCategory(filesByEpisode.size)
-
-        return entry.copy(
-            metadata = entry.metadata.copy(category = resolvedCategory),
-            episodeMediaFiles = filesByEpisode,
-        )
+        val episodeMediaFiles = try {
+            parseEpisodeMediaFiles(detailsDocument, isMovie = isMovie, context = entry.displayName)
+        } catch (exception: IllegalArgumentException) {
+            logger.warn("Неоднозначная нумерация в раздаче ${entry.detailsLink}: ${exception.message}")
+            return emptyList()
+        }
+        return episodeMediaFiles.map { (season, filesByEpisode) ->
+            val resolvedCategory = when {
+                episodeMediaFiles.size > 1 -> TorrentCategory.SEASON_PACK
+                else -> entry.metadata.category.resolveCategory(filesByEpisode.size)
+            }
+            entry.copy(
+                metadata = entry.metadata.copy(category = resolvedCategory, season = season.number),
+                episodeMediaFiles = filesByEpisode,
+                rawSeason = season,
+            )
+        }
     }
 
-    private fun parseEpisodeMediaFiles(document: Document, isMovie: Boolean): List<EpisodeMediaFile> {
+    internal fun parseEpisodeMediaFiles(
+        document: Document,
+        isMovie: Boolean,
+        context: String = "",
+    ): Map<RawSeason, Map<Int, EpisodeMediaFile>> {
         val mediaFiles = buildList {
             document.select("div.torrent-file-list > ul").forEach { root ->
                 root.select("> li").forEach { element ->
@@ -190,29 +193,12 @@ class NyaaGateway(private val client: HttpClient) {
             }
         }
 
-        val numberedFiles = mediaFiles.mapNotNull { mediaFile ->
-            mediaFile.episodeNumber?.let { episodeNumber ->
-                EpisodeMediaFile(
-                    episodeNumber = episodeNumber,
-                    fileName = mediaFile.fileName,
-                    fullPathInTorrent = mediaFile.fullPathInTorrent,
-                    sizeBytes = mediaFile.sizeBytes,
-                )
+        return EpisodeFileParser.indexFiles(mediaFiles, isMovie) { "$context/${it.fullPathInTorrent}" }
+            .mapValues { (_, files) ->
+                files.mapValues { (episodeNumber, file) ->
+                    EpisodeMediaFile(episodeNumber, file.fileName, file.fullPathInTorrent, file.sizeBytes)
+                }
             }
-        }
-        if (numberedFiles.isNotEmpty() || !isMovie) {
-            return numberedFiles
-        }
-
-        val movieFile = mediaFiles.singleOrNull() ?: return emptyList()
-        return listOf(
-            EpisodeMediaFile(
-                episodeNumber = 1,
-                fileName = movieFile.fileName,
-                fullPathInTorrent = movieFile.fullPathInTorrent,
-                sizeBytes = movieFile.sizeBytes,
-            )
-        )
     }
 
     private fun collectMediaFiles(
@@ -226,8 +212,7 @@ class NyaaGateway(private val client: HttpClient) {
                 return
             }
 
-            val lowerName = fileName.lowercase()
-            if (!lowerName.endsWith(".mkv") && !lowerName.endsWith(".mp4")) {
+            if (!fileName.isMediaFile()) {
                 return
             }
 
@@ -239,7 +224,6 @@ class NyaaGateway(private val client: HttpClient) {
             val sizeText = entryElement.selectFirst("span.file-size")!!.text().removePrefix("(").removeSuffix(")")
 
             destination += ParsedMediaFile(
-                episodeNumber = fileName.extractEpisodeNumber(),
                 fileName = fileName,
                 fullPathInTorrent = fullPath,
                 sizeBytes = sizeText.parseSizeToBytes(),
@@ -268,7 +252,7 @@ class NyaaGateway(private val client: HttpClient) {
         }
     }
 
-    private fun buildCandidates(entries: List<TorrentEntry>, episodesAired: Int): List<TorrentCandidate> {
+    internal fun buildCandidates(entries: List<TorrentEntry>, episodesAired: Int): List<TorrentCandidate> {
         val seasonCandidates = mutableListOf<TorrentCandidate.SeasonPack>()
         val singleEpisodeBuckets = linkedMapOf<String, MutableList<TorrentEntry>>()
 
@@ -328,8 +312,17 @@ class NyaaGateway(private val client: HttpClient) {
             )
         }
 
-        return (seasonCandidates + groupedCandidates).sortedWith(
-            compareByDescending<TorrentCandidate> { it.episodes.size == episodesAired }
+        val combinedSeasonCandidates = seasonCandidates.groupBy { it.entry.id }.map { (_, candidates) ->
+            val seasonEntries = candidates.associate { it.entry.rawSeason to it.entry }.toSortedMap()
+            TorrentCandidate.SeasonPack(entry = seasonEntries.values.first(), seasonEntries = seasonEntries)
+        }
+        return (combinedSeasonCandidates + groupedCandidates).sortedWith(
+            compareByDescending<TorrentCandidate> { candidate ->
+                when (candidate) {
+                    is TorrentCandidate.SeasonPack -> candidate.seasonEntries.values.any { it.episodeMediaFiles.size == episodesAired }
+                    is TorrentCandidate.EpisodeGroup -> candidate.episodes.size == episodesAired
+                }
+            }
                 .thenByDescending { it.candidateSeasonSizeBytes() }
         )
     }
@@ -430,8 +423,8 @@ class NyaaGateway(private val client: HttpClient) {
         val escapedEpisode = Regex.escape(episodeNumber.toString())
         val episodeTokenRegex = Regex(
             """(?i)(?<=[\s._\-(\[])""" +
-                """(?:EP|E|EPISODE)?\s*0*$escapedEpisode(?:V\d+)?""" +
-                """(?=[\s._\-)\]]|$)"""
+                    """(?:EP|E|EPISODE)?\s*0*$escapedEpisode(?:V\d+)?""" +
+                    """(?=[\s._\-)\]]|$)"""
         )
         return replace(episodeTokenRegex, " ")
     }
@@ -442,7 +435,6 @@ class NyaaGateway(private val client: HttpClient) {
     }
 
     private data class ParsedMediaFile(
-        val episodeNumber: Int? = null,
         val fileName: String,
         val fullPathInTorrent: String,
         val sizeBytes: Long,
@@ -491,10 +483,6 @@ class NyaaGateway(private val client: HttpClient) {
 
     private fun String.extractResolution() = extractResolutionRegex.find(this)
         ?.groupValues?.getOrNull(1)?.uppercase()
-
-    private fun String.extractSeason() = extractSeasonPatterns.firstNotNullOfOrNull { pattern ->
-        pattern.find(this)?.groupValues?.getOrNull(1)?.toIntOrNull()
-    }
 
     private fun String.parseSizeToBytes(): Long {
         val match = torrentSizeRegex.find(this)!!

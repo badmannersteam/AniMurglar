@@ -1,5 +1,6 @@
 package com.badmanners.animurglar.nyaa
 
+import com.badmanners.animurglar.media.RawSeason
 import java.time.Instant
 
 
@@ -20,6 +21,7 @@ data class TorrentEntry(
     val totalDownloads: Int,
     val uploadedAt: Instant,
     val episodeMediaFiles: Map<Int, EpisodeMediaFile> = emptyMap(),
+    val rawSeason: RawSeason = RawSeason(metadata.season),
 ) {
     data class ParsedTorrentMetadata(
         val normalizedTitle: String,
@@ -68,9 +70,18 @@ sealed interface TorrentCandidate {
     data class SeasonPack(
         val entry: TorrentEntry,
         override val episodes: List<Int> = entry.episodeMediaFiles.keys.sorted(),
+        val seasonEntries: Map<RawSeason, TorrentEntry> = mapOf(entry.rawSeason to entry),
     ) : TorrentCandidate {
         override val key: String
             get() = "pack:${entry.id}"
+
+        val seasons: List<RawSeason>
+            get() = seasonEntries.keys.sorted()
+
+        fun selectSeason(season: RawSeason): SeasonPack {
+            val selectedEntry = seasonEntries.getValue(season)
+            return copy(entry = selectedEntry, episodes = selectedEntry.episodeMediaFiles.keys.sorted())
+        }
     }
 
     data class EpisodeGroup(

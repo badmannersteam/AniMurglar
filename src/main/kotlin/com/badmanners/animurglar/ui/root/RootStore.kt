@@ -5,13 +5,14 @@ import com.arkivanov.mvikotlin.core.store.StoreFactory
 import com.arkivanov.mvikotlin.extensions.coroutines.coroutineBootstrapper
 import com.arkivanov.mvikotlin.extensions.coroutines.coroutineExecutorFactory
 import com.arkivanov.mvikotlin.extensions.coroutines.labels
+import com.arkivanov.mvikotlin.extensions.coroutines.stateFlow
 import com.badmanners.animurglar.app.config.AppConfig
 import com.badmanners.animurglar.downloader.DownloadRequest
 import com.badmanners.animurglar.downloader.RawVideoSource
 import com.badmanners.animurglar.downloader.suggestEpisodeMapping
 import com.badmanners.animurglar.dubs.DubInfo
 import com.badmanners.animurglar.local.LocalRawFilesService
-import com.badmanners.animurglar.nyaa.TorrentCandidate
+import com.badmanners.animurglar.media.RawSeason
 import com.badmanners.animurglar.pipeline.DownloadBatch
 import com.badmanners.animurglar.shikimori.ShikimoriAnime
 import com.badmanners.animurglar.subtitles.SubtitleTeamInfo
@@ -19,6 +20,7 @@ import com.badmanners.animurglar.ui.downloader.DownloaderStore
 import com.badmanners.animurglar.ui.dubs.DubsPickerStore
 import com.badmanners.animurglar.ui.episodes.EpisodeMappingStore
 import com.badmanners.animurglar.ui.nyaa.NyaaPickerStore
+import com.badmanners.animurglar.ui.nyaa.selectedCandidate
 import com.badmanners.animurglar.ui.processing.ProcessingStore
 import com.badmanners.animurglar.ui.root.RootStore.Action
 import com.badmanners.animurglar.ui.root.RootStore.Intent
@@ -31,6 +33,8 @@ import com.badmanners.animurglar.utils.deleteRecursivelyIfExists
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.nio.file.Path
@@ -57,6 +61,7 @@ interface RootStore : Store<Intent, State, Label> {
         data class RawSourceKindChanged(val kind: RawSourceKind) : Intent
         data class LocalFolderChanged(val folder: String) : Intent
         data object ScanLocalFolder : Intent
+        data class LocalSeasonSelected(val season: RawSeason) : Intent
         data class LocalEpisodeSelectionChanged(val episodeNumber: Int, val selected: Boolean) : Intent
         data class AllLocalEpisodesSelectionChanged(val selected: Boolean) : Intent
     }
@@ -66,11 +71,15 @@ interface RootStore : Store<Intent, State, Label> {
         val pendingAnimeSelection: ShikimoriAnime? = null,
         val rawSourceKind: RawSourceKind = RawSourceKind.NYAA,
         val localFolder: String = "",
-        val localFiles: Map<Int, Path> = emptyMap(),
+        val localSeasons: Map<RawSeason, Map<Int, Path>> = emptyMap(),
+        val selectedLocalSeason: RawSeason? = null,
         val selectedLocalEpisodes: Set<Int> = emptySet(),
         val isScanningLocalFolder: Boolean = false,
         val localFolderError: String? = null,
-    )
+    ) {
+        val localFiles: Map<Int, Path>
+            get() = selectedLocalSeason?.let { localSeasons.getValue(it) } ?: emptyMap()
+    }
 
     sealed interface Message {
         data class AnimeSelectionApplied(val anime: ShikimoriAnime) : Message
@@ -79,8 +88,9 @@ interface RootStore : Store<Intent, State, Label> {
         data class RawSourceKindChanged(val kind: RawSourceKind) : Message
         data class LocalFolderChanged(val folder: String) : Message
         data object LocalScanStarted : Message
-        data class LocalScanSucceeded(val files: Map<Int, Path>) : Message
+        data class LocalScanSucceeded(val files: Map<RawSeason, Map<Int, Path>>) : Message
         data class LocalScanFailed(val error: String) : Message
+        data class LocalSeasonSelected(val season: RawSeason) : Message
         data class LocalEpisodeSelectionChanged(val episodeNumber: Int, val selected: Boolean) : Message
         data class AllLocalEpisodesSelectionChanged(val selected: Boolean) : Message
     }
@@ -126,6 +136,15 @@ class RootStoreFactory(
                         }
                     }
                 }
+            }
+
+            launch {
+                nyaaPickerStore.stateFlow
+                    .map { it.selectedCandidateKey to it.selectedSeason }
+                    .distinctUntilChanged()
+                    .collect {
+                        episodeMappingStore.accept(EpisodeMappingStore.Intent.Reset)
+                    }
             }
         },
         executorFactory = coroutineExecutorFactory {
@@ -186,6 +205,7 @@ class RootStoreFactory(
                 val folder = state().localFolder
                 activeLocalScan?.cancel()
                 dispatch(Message.LocalScanStarted)
+                episodeMappingStore.accept(EpisodeMappingStore.Intent.Reset)
                 activeLocalScan = launch {
                     try {
                         require(folder.isNotBlank()) { "Укажите папку с готовыми видеофайлами." }
@@ -197,6 +217,15 @@ class RootStoreFactory(
                         dispatch(Message.LocalScanFailed(exception.message ?: "Не удалось прочитать папку."))
                     }
                 }
+            }
+
+            onIntent<Intent.LocalSeasonSelected> { intent ->
+                if (isExecutionRunning()
+                    || intent.season !in state().localSeasons
+                    || intent.season == state().selectedLocalSeason
+                ) return@onIntent
+                dispatch(Message.LocalSeasonSelected(intent.season))
+                episodeMappingStore.accept(EpisodeMappingStore.Intent.Reset)
             }
 
             onIntent<Intent.LocalEpisodeSelectionChanged> { intent ->
@@ -217,7 +246,15 @@ class RootStoreFactory(
                 val episodeMappingState = episodeMappingStore.state
                 val downloaderState = downloaderStore.state
                 val processingState = processingStore.state
-                if (!isStartAvailable(rootState, nyaaState, dubsState, subtitlesState, downloaderState, processingState)) {
+                if (!isStartAvailable(
+                        rootState,
+                        nyaaState,
+                        dubsState,
+                        subtitlesState,
+                        downloaderState,
+                        processingState
+                    )
+                ) {
                     return@onIntent
                 }
 
@@ -254,7 +291,8 @@ class RootStoreFactory(
                     selectedAnime = message.anime,
                     pendingAnimeSelection = null,
                     localFolder = "",
-                    localFiles = emptyMap(),
+                    localSeasons = emptyMap(),
+                    selectedLocalSeason = null,
                     selectedLocalEpisodes = emptySet(),
                     isScanningLocalFolder = false,
                     localFolderError = null,
@@ -275,29 +313,43 @@ class RootStoreFactory(
 
                 is Message.LocalFolderChanged -> copy(
                     localFolder = message.folder,
-                    localFiles = emptyMap(),
+                    localSeasons = emptyMap(),
+                    selectedLocalSeason = null,
                     selectedLocalEpisodes = emptySet(),
                     isScanningLocalFolder = false,
                     localFolderError = null,
                 )
 
                 Message.LocalScanStarted -> copy(
-                    localFiles = emptyMap(),
+                    localSeasons = emptyMap(),
+                    selectedLocalSeason = null,
                     selectedLocalEpisodes = emptySet(),
                     isScanningLocalFolder = true,
                     localFolderError = null,
                 )
 
-                is Message.LocalScanSucceeded -> copy(
-                    localFiles = message.files,
-                    selectedLocalEpisodes = message.files.keys.toSet(),
-                    isScanningLocalFolder = false,
-                )
+                is Message.LocalScanSucceeded -> {
+                    val season = message.files.keys.minOrNull()
+                    copy(
+                        localSeasons = message.files,
+                        selectedLocalSeason = season,
+                        selectedLocalEpisodes = season?.let { message.files.getValue(it).keys.toSet() } ?: emptySet(),
+                        isScanningLocalFolder = false,
+                    )
+                }
 
                 is Message.LocalScanFailed -> copy(
                     isScanningLocalFolder = false,
                     localFolderError = message.error,
                 )
+
+                is Message.LocalSeasonSelected -> when {
+                    message.season !in localSeasons || message.season == selectedLocalSeason -> this
+                    else -> copy(
+                        selectedLocalSeason = message.season,
+                        selectedLocalEpisodes = localSeasons.getValue(message.season).keys.toSet(),
+                    )
+                }
 
                 is Message.LocalEpisodeSelectionChanged -> copy(
                     selectedLocalEpisodes = when {
@@ -369,6 +421,7 @@ class RootStoreFactory(
             RawSourceKind.NYAA -> RawVideoSource.Nyaa(
                 checkNotNull(nyaaState.selectedCandidate()) { "Torrent candidate is not selected." }
             )
+
             RawSourceKind.LOCAL -> RawVideoSource.Local(rootState.localFiles)
         }
         val selectedEpisodes = rootState.selectedRawEpisodes(nyaaState)
@@ -386,11 +439,6 @@ class RootStoreFactory(
             episodeMapping = episodeMapping,
             selectedSubtitles = subtitlesState.selectedSubtitles(),
         )
-    }
-
-    private fun NyaaPickerStore.State.selectedCandidate(): TorrentCandidate? {
-        val key = selectedCandidateKey ?: return null
-        return candidates.firstOrNull { it.key == key }
     }
 
     private fun DubsPickerStore.State.selectedDubs(): List<DubInfo> {
@@ -425,8 +473,10 @@ fun State.selectedRawEpisodes(nyaaState: NyaaPickerStore.State) = when (rawSourc
 
 fun State.isRawSelectionReady(nyaaState: NyaaPickerStore.State) = when (rawSourceKind) {
     RawSourceKind.NYAA -> !nyaaState.isLoading
-        && nyaaState.candidates.any { it.key == nyaaState.selectedCandidateKey }
-        && nyaaState.selectedEpisodes.isNotEmpty()
+            && nyaaState.selectedCandidate() != null
+            && nyaaState.selectedEpisodes.isNotEmpty()
 
-    RawSourceKind.LOCAL -> !isScanningLocalFolder && selectedLocalEpisodes.isNotEmpty()
+    RawSourceKind.LOCAL -> !isScanningLocalFolder
+            && selectedLocalSeason != null
+            && selectedLocalEpisodes.isNotEmpty()
 }

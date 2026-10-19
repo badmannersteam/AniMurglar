@@ -37,11 +37,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.arkivanov.mvikotlin.extensions.coroutines.stateFlow
+import com.badmanners.animurglar.media.RawSeason
 import com.badmanners.animurglar.nyaa.TorrentCandidate
 import com.badmanners.animurglar.nyaa.TorrentEntry
 import com.badmanners.animurglar.nyaa.TorrentEntry.EpisodeMediaFile
 import com.badmanners.animurglar.nyaa.TorrentEpisodeGroup
 import com.badmanners.animurglar.ui.episodes.EpisodeSelectionSection
+import com.badmanners.animurglar.ui.episodes.SeasonSelection
 import com.badmanners.animurglar.ui.nyaa.NyaaPickerStore.Intent
 import com.badmanners.animurglar.utils.openInBrowser
 import com.badmanners.animurglar.utils.toReadableSize
@@ -59,16 +61,18 @@ fun NyaaPickerScreen(
 ) {
     val state by nyaaPickerStore.stateFlow.collectAsState()
     val selectedCandidate = state.candidates.firstOrNull { it.key == state.selectedCandidateKey }
+    val scopedCandidate = state.selectedCandidate()
 
     val isVisible = state.isLoading
-        || state.error != null
-        || state.candidates.isNotEmpty()
-        || selectedCandidate != null
+            || state.error != null
+            || state.candidates.isNotEmpty()
+            || selectedCandidate != null
 
     if (isVisible) {
         Column(modifier = modifier.fillMaxWidth()) {
             NyaaPickerCard(
-                selectedCandidate = selectedCandidate,
+                selectedCandidate = scopedCandidate ?: selectedCandidate,
+                selectedSeason = state.selectedSeason,
                 candidatesCount = state.candidates.size,
                 isLoading = state.isLoading,
                 error = state.error,
@@ -78,39 +82,51 @@ fun NyaaPickerScreen(
                 onCancelSearch = { nyaaPickerStore.accept(Intent.CancelSearch) },
             )
 
-            EpisodeSelectionSection(
-                episodes = selectedCandidate?.episodes.orEmpty(),
-                selectedEpisodes = state.selectedEpisodes,
-                onEpisodeSelectionChanged = { episodeNumber, selected ->
-                    nyaaPickerStore.accept(
-                        Intent.EpisodeSelectionChanged(
-                            episodeNumber = episodeNumber,
-                            selected = selected,
-                        )
-                    )
-                },
-                onSelectAll = {
-                    selectedCandidate?.episodes?.forEach { episodeNumber ->
+            if (scopedCandidate != null) {
+                EpisodeSelectionSection(
+                    episodes = scopedCandidate.episodes,
+                    selectedEpisodes = state.selectedEpisodes,
+                    onEpisodeSelectionChanged = { episodeNumber, selected ->
                         nyaaPickerStore.accept(
                             Intent.EpisodeSelectionChanged(
                                 episodeNumber = episodeNumber,
-                                selected = true,
+                                selected = selected,
                             )
                         )
-                    }
-                },
-                onClearAll = {
-                    selectedCandidate?.episodes?.forEach { episodeNumber ->
-                        nyaaPickerStore.accept(
-                            Intent.EpisodeSelectionChanged(
-                                episodeNumber = episodeNumber,
-                                selected = false,
+                    },
+                    onSelectAll = {
+                        scopedCandidate.episodes.forEach { episodeNumber ->
+                            nyaaPickerStore.accept(
+                                Intent.EpisodeSelectionChanged(
+                                    episodeNumber = episodeNumber,
+                                    selected = true,
+                                )
                             )
-                        )
-                    }
-                },
-                modifier = Modifier.padding(top = 12.dp),
-            )
+                        }
+                    },
+                    onClearAll = {
+                        scopedCandidate.episodes.forEach { episodeNumber ->
+                            nyaaPickerStore.accept(
+                                Intent.EpisodeSelectionChanged(
+                                    episodeNumber = episodeNumber,
+                                    selected = false,
+                                )
+                            )
+                        }
+                    },
+                    modifier = Modifier.padding(top = 12.dp),
+                    headerContent = {
+                        if (selectedCandidate is TorrentCandidate.SeasonPack) {
+                            SeasonSelection(
+                                seasons = selectedCandidate.seasons,
+                                selectedSeason = state.selectedSeason,
+                                onSeasonSelected = { nyaaPickerStore.accept(Intent.SeasonSelected(it)) },
+                                modifier = Modifier.padding(bottom = 8.dp),
+                            )
+                        }
+                    },
+                )
+            }
         }
     }
 
@@ -156,6 +172,7 @@ private fun SearchProgressSection(
 @Composable
 private fun NyaaPickerCard(
     selectedCandidate: TorrentCandidate?,
+    selectedSeason: RawSeason?,
     candidatesCount: Int,
     isLoading: Boolean,
     error: String?,
@@ -216,6 +233,7 @@ private fun NyaaPickerCard(
                     modifier = Modifier.padding(top = 6.dp),
                     onClick = onOpenDialog,
                     candidate = it,
+                    selectedSeason = selectedSeason,
                 )
             }
         }
@@ -316,13 +334,16 @@ private fun CandidateDialogEntryCard(
     onClick: () -> Unit = {},
     selected: Boolean? = null,
     candidate: TorrentCandidate,
+    selectedSeason: RawSeason? = null,
 ) {
     when (candidate) {
         is TorrentCandidate.SeasonPack -> SeasonPackSnapshot(
             modifier = modifier,
             onClick = onClick,
             selected = selected,
-            entry = candidate.entry
+            entry = candidate.entry,
+            seasonEntries = candidate.seasonEntries,
+            selectedSeason = selectedSeason,
         )
 
         is TorrentCandidate.EpisodeGroup -> EpisodeGroupSnapshot(
@@ -339,19 +360,33 @@ private fun SeasonPackSnapshot(
     modifier: Modifier,
     onClick: () -> Unit,
     selected: Boolean?,
-    entry: TorrentEntry
+    entry: TorrentEntry,
+    seasonEntries: Map<RawSeason, TorrentEntry>,
+    selectedSeason: RawSeason?,
 ) {
+    val entries = when (selectedSeason) {
+        null -> seasonEntries.toSortedMap()
+        else -> mapOf(selectedSeason to entry)
+    }
+    val mediaFiles = entries.values.flatMap { it.episodeMediaFiles.values }
     TorrentCard(
         modifier = modifier,
         onClick = onClick,
         selected = selected,
         displayName = entry.displayName,
-        type = "Сезонный пак",
+        type = when {
+            selectedSeason != null -> "Сезонный пак • ${selectedSeason.label}"
+            entries.size > 1 -> "Сезонный пак • Сезонов: ${entries.size}"
+            else -> "Сезонный пак • ${entries.keys.single().label}"
+        },
         category = entry.nyaaCategory,
-        totalEpisodes = entry.episodeMediaFiles.size,
-        episodeRange = entry.episodeMediaFiles.keys.sorted().toEpisodeRangeLabel(),
-        totalSize = entry.totalSizeBytes.toReadableSize(),
-        sizeRange = entry.episodeMediaFiles.values.map(EpisodeMediaFile::sizeBytes).toSizeRangeLabel(),
+        totalEpisodes = mediaFiles.size,
+        episodeRange = when {
+            entries.size > 1 -> "Сезонов: ${entries.size}"
+            else -> entries.values.single().episodeMediaFiles.keys.toList().toEpisodeRangeLabel()
+        },
+        totalSize = mediaFiles.sumOf(EpisodeMediaFile::sizeBytes).toReadableSize(),
+        sizeRange = mediaFiles.map(EpisodeMediaFile::sizeBytes).toSizeRangeLabel(),
         seedersRange = entry.seeders.toString(),
         downloadsRange = entry.totalDownloads.toString(),
         dateRange = entry.uploadedAt.toDisplayDate(),
@@ -362,9 +397,11 @@ private fun SeasonPackSnapshot(
             entry.metadata.audioCodec,
         ).joinToString(" • "),
         showFiles = selected != null,
-        files = entry.episodeMediaFiles.values
-            .sortedBy { it.episodeNumber }
-            .map { file -> "Серия ${file.episodeNumber}: ${file.fullPathInTorrent} (${file.sizeBytes.toReadableSize()})" },
+        files = entries.flatMap { (season, seasonEntry) ->
+            seasonEntry.episodeMediaFiles.values
+                .sortedBy { it.episodeNumber }
+                .map { file -> "${season.label} • Серия ${file.episodeNumber}: ${file.fullPathInTorrent} (${file.sizeBytes.toReadableSize()})" }
+        },
         detailsLink = entry.detailsLink
     )
 }
